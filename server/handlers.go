@@ -213,7 +213,7 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 	}
 
 	if tif := extractTimeInForce(orderMap); strings.EqualFold(tif, "ioc") {
-		if strings.EqualFold(coin, "BTC") && limitPx <= 100 {
+		if strings.EqualFold(coin, "BTC") && limitPx <= 87000 {
 			errMsg := ErrOrderIocCancel.Error()
 			return OrderStatusResponse{Error: &errMsg}
 		}
