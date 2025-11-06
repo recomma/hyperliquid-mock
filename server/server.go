@@ -1,13 +1,15 @@
 package server
 
 import (
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 )
 
 // Run starts the HTTP server
 func Run(addr string) error {
-	handler := NewHandler()
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	handler := NewHandler(WithLogger(logger))
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/exchange", handler.HandleExchange)
@@ -15,21 +17,21 @@ func Run(addr string) error {
 	mux.HandleFunc("/health", handler.HandleHealth)
 
 	// Log all requests
-	loggedMux := loggingMiddleware(mux)
+	loggedMux := loggingMiddleware(logger, mux)
 
-	log.Printf("Mock Hyperliquid API server listening on %s", addr)
-	log.Printf("Endpoints:")
-	log.Printf("  POST   %s/exchange", addr)
-	log.Printf("  POST   %s/info", addr)
-	log.Printf("  GET    %s/health", addr)
+	logger.Info("Mock Hyperliquid API server listening", "addr", addr)
+	logger.Info("Endpoints", "exchange", addr+"/exchange", "info", addr+"/info", "health", addr+"/health")
 
 	return http.ListenAndServe(addr, loggedMux)
 }
 
 // loggingMiddleware logs all incoming requests
-func loggingMiddleware(next http.Handler) http.Handler {
+func loggingMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Info("incoming request", "method", r.Method, "path", r.URL.Path, "remote", r.RemoteAddr)
 		next.ServeHTTP(w, r)
 	})
 }

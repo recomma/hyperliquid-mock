@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -34,12 +35,18 @@ type RequestCapture struct {
 	requests []CapturedRequest
 	skipMeta bool
 	metaLeft int
+	logger   *slog.Logger
 }
 
 // NewRequestCapture creates a new request capture collector
-func NewRequestCapture() *RequestCapture {
+func NewRequestCapture(logger *slog.Logger) *RequestCapture {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &RequestCapture{
 		requests: make([]CapturedRequest, 0),
+		logger:   logger,
 	}
 }
 
@@ -76,6 +83,10 @@ func (rc *RequestCapture) Wrap(next http.Handler) http.Handler {
 			}
 		}
 
+		if rc.logger != nil {
+			rc.logger.Debug("request received", "method", r.Method, "path", r.URL.Path, "body", string(body))
+		}
+
 		if shouldCapture {
 			rc.mu.Lock()
 			rc.requests = append(rc.requests, CapturedRequest{
@@ -89,8 +100,43 @@ func (rc *RequestCapture) Wrap(next http.Handler) http.Handler {
 		}
 
 		// Pass to actual handler
-		next.ServeHTTP(w, r)
+		lrw := &responseRecorder{ResponseWriter: w}
+		next.ServeHTTP(lrw, r)
+
+		if rc.logger != nil {
+			rc.logger.Debug("response sent", "method", r.Method, "path", r.URL.Path, "status", lrw.status(), "body", lrw.body())
+		}
 	})
+}
+
+type responseRecorder struct {
+	http.ResponseWriter
+	buf  bytes.Buffer
+	code int
+}
+
+func (rr *responseRecorder) WriteHeader(statusCode int) {
+	rr.code = statusCode
+	rr.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (rr *responseRecorder) Write(data []byte) (int, error) {
+	if rr.code == 0 {
+		rr.code = http.StatusOK
+	}
+	rr.buf.Write(data)
+	return rr.ResponseWriter.Write(data)
+}
+
+func (rr *responseRecorder) status() int {
+	if rr.code == 0 {
+		return http.StatusOK
+	}
+	return rr.code
+}
+
+func (rr *responseRecorder) body() string {
+	return rr.buf.String()
 }
 
 // GetRequests returns a copy of all captured requests
@@ -120,11 +166,25 @@ func (rc *RequestCapture) Clear() {
 	rc.metaLeft = 2
 }
 
+type TestServerOption = Option
+
 // NewTestServer creates a new test server with automatic cleanup
 // Each test gets an isolated server instance on a random port
-func NewTestServer(t *testing.T) *TestServer {
-	handler := NewHandler()
-	capture := NewRequestCapture()
+func NewTestServer(t *testing.T, opts ...TestServerOption) *TestServer {
+	cfg := options{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	logger := cfg.logger
+	if logger == nil {
+		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+
+	handler := NewHandler(WithLogger(logger))
+	capture := NewRequestCapture(logger)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/exchange", handler.HandleExchange)
