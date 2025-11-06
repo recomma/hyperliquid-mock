@@ -61,6 +61,27 @@ export HYPERLIQUIDURL="http://localhost:8080"
 
 Or in your secrets configuration file.
 
+## Upstream API Documentation
+
+The `upstream-api-docs/` directory contains documentation for the real Hyperliquid API. This is provided as a reference for LLMs and developers who want to expand the mock server's capabilities. The mock server currently implements only a subset of the full API.
+
+### Currently Implemented Actions
+
+**Exchange endpoint (/exchange):**
+- `order` - Order creation
+- `cancel` / `cancelByCloid` - Order cancellation
+- `modify` - Single order modification
+- `batchModify` - Batch order modifications
+
+**Info endpoint (/info):**
+- `orderStatus` - Query order by OID or CLOID
+- `metaAndAssetCtxs` - Perpetual futures metadata
+- `spotMetaAndAssetCtxs` - Spot trading metadata
+- `meta` - Simplified perpetual metadata
+- `spotMeta` - Simplified spot metadata
+
+All other action types return a generic success response but do not implement real functionality.
+
 ## Endpoints
 
 ### POST /exchange
@@ -131,7 +152,7 @@ Handles queries:
 **Example response:**
 ```json
 {
-  "status": "success",
+  "status": "order",
   "order": {
     "order": {
       "coin": "ETH",
@@ -360,17 +381,22 @@ curl -X POST http://localhost:8080/info \
 hyperliquid-mock/
 ├── main.go                    # Binary entry point
 ├── go.mod                     # Go module file
-├── openapi.yaml               # OpenAPI specification
+├── go.sum                     # Go dependencies
 ├── README.md                  # This file
-├── Makefile                   # Build automation
-├── examples_test.go           # Integration test examples
+├── upstream-api-docs/         # Real Hyperliquid API reference (for expansion)
+│   ├── exchange-endpoint.md
+│   ├── info-endpoint.md
+│   ├── perpetuals.md
+│   └── spot.md
 └── server/
     ├── server.go              # HTTP server setup
     ├── handlers.go            # Request handlers
+    ├── handlers_test.go       # Handler unit tests
     ├── types.go               # Request/response types
     ├── state.go               # In-memory state management
     ├── testserver.go          # Test helpers & request capture
-    └── testserver_test.go     # Test server examples
+    ├── testserver_test.go     # TestServer usage examples
+    └── integration_test.go    # Full integration tests with go-hyperliquid
 ```
 
 ### Adding new endpoints
