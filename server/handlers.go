@@ -50,8 +50,10 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 		switch order {
 		case "order":
 			response = h.handleOrder(actionMap)
-		case "cancel":
+		case "cancel", "cancelByCloid":
 			response = h.handleCancel(actionMap)
+		case "modify":
+			response = h.handleModify(actionMap)
 		case "batchModify":
 			response = h.handleBatchModify(actionMap)
 		default:
@@ -105,11 +107,56 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 
 // processOrder creates or modifies a single order
 func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusResponse {
-	coin, _ := orderMap["coin"].(string)
-	isBuy, _ := orderMap["is_buy"].(bool)
-	sz, _ := orderMap["sz"].(float64)
-	limitPx, _ := orderMap["limit_px"].(float64)
-	cloid, _ := orderMap["cloid"].(string)
+	// Handle both full field names and abbreviated format
+	// Abbreviated: a=asset, b=is_buy, c=cloid, o=oid, p=price, s=size
+	var coin string
+	var isBuy bool
+	var sz, limitPx float64
+	var cloid string
+	var oid int64
+	var hasOid bool
+
+	// Try abbreviated format first (used by go-hyperliquid)
+	if assetIdx, ok := orderMap["a"].(float64); ok {
+		// Map asset index to coin name
+		coin = h.mapAssetIndexToCoin(int(assetIdx))
+		isBuy, _ = orderMap["b"].(bool)
+		sz = parseNumeric(orderMap["s"])
+		limitPx = parseNumeric(orderMap["p"])
+		cloid, _ = orderMap["c"].(string)
+
+		// Check for oid (for modify operations)
+		if oidVal, ok := orderMap["o"].(float64); ok {
+			oid = int64(oidVal)
+			hasOid = true
+		} else if oidVal, ok := orderMap["o"].(string); ok {
+			// Parse hex string
+			if len(oidVal) > 2 && oidVal[:2] == "0x" {
+				oidVal = oidVal[2:]
+			}
+			parsed, err := strconv.ParseInt(oidVal, 16, 64)
+			if err == nil {
+				oid = parsed
+				hasOid = true
+			}
+		}
+	} else {
+		// Fall back to full field names
+		coin, _ = orderMap["coin"].(string)
+		isBuy, _ = orderMap["is_buy"].(bool)
+		sz = parseNumeric(orderMap["sz"])
+		limitPx = parseNumeric(orderMap["limit_px"])
+		cloid, _ = orderMap["cloid"].(string)
+
+		// Check for oid
+		if oidVal, ok := orderMap["oid"].(int64); ok {
+			oid = oidVal
+			hasOid = true
+		} else if oidVal, ok := orderMap["oid"].(float64); ok {
+			oid = int64(oidVal)
+			hasOid = true
+		}
+	}
 
 	side := "B"
 	if !isBuy {
@@ -119,11 +166,31 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 	szStr := fmt.Sprintf("%.8g", sz)
 	pxStr := fmt.Sprintf("%.8g", limitPx)
 
-	// Check if this is a modification (cloid exists)
-	if cloid != "" {
-		if oid, ok := h.state.ModifyOrder(cloid, pxStr, szStr); ok {
+	// Check if this is a modification (has oid)
+	if hasOid {
+		if modifiedOid, ok := h.state.ModifyOrderByOid(oid, pxStr, szStr); ok {
+			// Get cloid for the response if it exists
+			if order, exists := h.state.GetOrderByOid(modifiedOid); exists && order.Order.Cloid != nil {
+				return OrderStatusResponse{
+					Resting: &RestingStatus{Oid: modifiedOid, Cloid: order.Order.Cloid},
+				}
+			}
 			return OrderStatusResponse{
-				Resting: &RestingStatus{Oid: oid, Cloid: &cloid},
+				Resting: &RestingStatus{Oid: modifiedOid},
+			}
+		}
+		// If we have an OID but the order wasn't found, return an error
+		errMsg := fmt.Sprintf("Order not found: oid=%d", oid)
+		return OrderStatusResponse{
+			Error: &errMsg,
+		}
+	}
+
+	// Check if this is a modification by cloid
+	if cloid != "" {
+		if modifiedOid, ok := h.state.ModifyOrder(cloid, pxStr, szStr); ok {
+			return OrderStatusResponse{
+				Resting: &RestingStatus{Oid: modifiedOid, Cloid: &cloid},
 			}
 		}
 	}
@@ -133,11 +200,116 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		cloid = fmt.Sprintf("mock-%d", time.Now().UnixNano())
 	}
 
-	oid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr)
+	newOid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr)
 
 	return OrderStatusResponse{
-		Resting: &RestingStatus{Oid: oid, Cloid: &cloid},
+		Resting: &RestingStatus{Oid: newOid, Cloid: &cloid},
 	}
+}
+
+// mapAssetIndexToCoin maps an asset index to a coin name
+func (h *Handler) mapAssetIndexToCoin(index int) string {
+	// Standard mapping based on common perpetual futures order
+	assets := []string{"BTC", "ETH", "SOL", "ARB"}
+	if index >= 0 && index < len(assets) {
+		return assets[index]
+	}
+	return fmt.Sprintf("ASSET_%d", index)
+}
+
+// handleModify processes a single order modification
+func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
+	// Extract oid (can be numeric or hex string)
+	var oid int64
+	var hasOid bool
+
+	if oidVal, ok := action["oid"].(float64); ok {
+		oid = int64(oidVal)
+		hasOid = true
+	} else if oidVal, ok := action["oid"].(string); ok {
+		// Parse hex string or cloid
+		if len(oidVal) > 2 && oidVal[:2] == "0x" {
+			// Try to parse as hex OID
+			parsed, err := strconv.ParseInt(oidVal[2:], 16, 64)
+			if err == nil {
+				oid = parsed
+				hasOid = true
+			} else {
+				// It's a cloid, not an OID
+				// Try to find the order by cloid
+				if order, exists := h.state.GetOrder(oidVal); exists {
+					oid = order.Order.Oid
+					hasOid = true
+				}
+			}
+		}
+	}
+
+	if !hasOid {
+		errMsg := "Missing or invalid oid"
+		return ExchangeResponse{
+			Status: "ok",
+			Response: &ExchangeActionData{
+				Type: "order",
+				Data: map[string]interface{}{
+					"statuses": []OrderStatusResponse{{Error: &errMsg}},
+				},
+			},
+		}
+	}
+
+	// Extract the order object
+	orderMap, ok := action["order"].(map[string]interface{})
+	if !ok {
+		errMsg := "Missing order object"
+		return ExchangeResponse{
+			Status: "ok",
+			Response: &ExchangeActionData{
+				Type: "order",
+				Data: map[string]interface{}{
+					"statuses": []OrderStatusResponse{{Error: &errMsg}},
+				},
+			},
+		}
+	}
+
+	// Inject the oid into the order map so processOrder can handle it
+	orderMap["o"] = float64(oid)
+
+	// Process the modification
+	status := h.processOrder(orderMap)
+
+	return ExchangeResponse{
+		Status: "ok",
+		Response: &ExchangeActionData{
+			Type: "order",
+			Data: map[string]interface{}{
+				"statuses": []OrderStatusResponse{status},
+			},
+		},
+	}
+}
+
+// parseNumeric extracts a float64 from a variety of input types commonly used
+// in Hyperliquid payloads (numbers encoded as floats, strings, or json.Number).
+func parseNumeric(value interface{}) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case string:
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			return parsed
+		}
+	case json.Number:
+		if parsed, err := v.Float64(); err == nil {
+			return parsed
+		}
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	}
+	return 0
 }
 
 // handleCancel processes order cancellation
@@ -147,20 +319,54 @@ func (h *Handler) handleCancel(action map[string]interface{}) ExchangeResponse {
 	if cancels, ok := action["cancels"].([]interface{}); ok {
 		for _, c := range cancels {
 			cancelMap, _ := c.(map[string]interface{})
-			cloid, _ := cancelMap["cloid"].(string)
+
+			// Try to cancel by OID first (abbreviated: o)
+			if oidVal, ok := cancelMap["o"].(float64); ok {
+				oid := int64(oidVal)
+				if h.state.CancelOrderByOid(oid) {
+					statuses = append(statuses, "success")
+				} else {
+					statuses = append(statuses, map[string]interface{}{
+						"error": fmt.Sprintf("Order was never placed, already canceled, or filled. oid=%d", oid),
+					})
+				}
+				continue
+			}
+
+			// Try by cloid (abbreviated format: c)
+			cloid, ok := cancelMap["c"].(string)
+			if !ok {
+				// Fall back to full field names
+				cloid, _ = cancelMap["cloid"].(string)
+			}
 
 			if cloid != "" {
-				h.state.CancelOrder(cloid)
-				// Real API returns "success" string for successful cancels
-				statuses = append(statuses, "success")
+				if h.state.CancelOrder(cloid) {
+					statuses = append(statuses, "success")
+				} else {
+					statuses = append(statuses, map[string]interface{}{
+						"error": fmt.Sprintf("Order was never placed, already canceled, or filled. cloid=%s", cloid),
+					})
+				}
 			}
 		}
 	} else {
-		// Single cancel
-		cloid, _ := action["cloid"].(string)
-		if cloid != "" {
-			h.state.CancelOrder(cloid)
-			statuses = append(statuses, "success")
+		// Single cancel - try both OID and cloid
+		if oidVal, ok := action["o"].(float64); ok {
+			oid := int64(oidVal)
+			if h.state.CancelOrderByOid(oid) {
+				statuses = append(statuses, "success")
+			}
+		} else {
+			cloid, ok := action["c"].(string)
+			if !ok {
+				cloid, _ = action["cloid"].(string)
+			}
+			if cloid != "" {
+				if h.state.CancelOrder(cloid) {
+					statuses = append(statuses, "success")
+				}
+			}
 		}
 	}
 
@@ -260,8 +466,18 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 	var order *OrderDetail
 	var exists bool
 
-	if req.Oid != nil {
-		order, exists = h.state.GetOrderByOid(*req.Oid)
+	if req.Oid != nil && !req.Oid.Valid() && req.Cloid == nil {
+		if raw := req.Oid.Raw(); raw != "" {
+			req.Cloid = &raw
+		}
+	}
+
+	// Try to query by OID first
+	if req.Oid != nil && req.Oid.Valid() {
+		order, exists = h.state.GetOrderByOid(req.Oid.Int64())
+	} else if req.Cloid != nil && *req.Cloid != "" {
+		// Query by CLOID
+		order, exists = h.state.GetOrder(*req.Cloid)
 	} else if req.User != "" {
 		// In a real implementation, we'd filter by user
 		// For the mock, we just return unknown
@@ -273,7 +489,7 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 	}
 
 	return OrderQueryResult{
-		Status: "success",
+		Status: "order",
 		Order:  order,
 	}
 }
@@ -286,6 +502,30 @@ func (h *Handler) handleMetaAndAssetCtxs() MetaAndAssetCtxs {
 			{Name: "ETH", SzDecimals: 4},
 			{Name: "SOL", SzDecimals: 1},
 			{Name: "ARB", SzDecimals: 0},
+		},
+		MarginTables: [][]interface{}{
+			{
+				1,
+				map[string]interface{}{
+					"description": "Standard",
+					"marginTiers": []map[string]interface{}{
+						{"lowerBound": "0.0", "maxLeverage": 50},
+						{"lowerBound": "100000.0", "maxLeverage": 25},
+						{"lowerBound": "500000.0", "maxLeverage": 10},
+					},
+				},
+			},
+			{
+				2,
+				map[string]interface{}{
+					"description": "Alt Coins",
+					"marginTiers": []map[string]interface{}{
+						{"lowerBound": "0.0", "maxLeverage": 20},
+						{"lowerBound": "50000.0", "maxLeverage": 10},
+						{"lowerBound": "200000.0", "maxLeverage": 5},
+					},
+				},
+			},
 		},
 		AssetCtxs: []AssetCtx{
 			{
@@ -358,20 +598,20 @@ func (h *Handler) handleMeta() Meta {
 		},
 		// MarginTables is an array of tuples: [[id, {description, marginTiers}], ...]
 		MarginTables: [][]interface{}{
-			{1, map[string]interface{}{
-				"description": "Standard",
-				"marginTiers": []map[string]interface{}{
-					{"lowerBound": "0.0", "maxLeverage": 50},
-					{"lowerBound": "100000.0", "maxLeverage": 25},
-					{"lowerBound": "500000.0", "maxLeverage": 10},
+			{1, MarginTable{
+				Description: "Standard",
+				MarginTiers: []MarginTier{
+					{LowerBound: "0.0", MaxLeverage: 50},
+					{LowerBound: "100000.0", MaxLeverage: 25},
+					{LowerBound: "500000.0", MaxLeverage: 10},
 				},
 			}},
-			{2, map[string]interface{}{
-				"description": "Alt Coins",
-				"marginTiers": []map[string]interface{}{
-					{"lowerBound": "0.0", "maxLeverage": 20},
-					{"lowerBound": "50000.0", "maxLeverage": 10},
-					{"lowerBound": "200000.0", "maxLeverage": 5},
+			{2, MarginTable{
+				Description: "Alt Coins",
+				MarginTiers: []MarginTier{
+					{LowerBound: "0.0", MaxLeverage: 20},
+					{LowerBound: "50000.0", MaxLeverage: 10},
+					{LowerBound: "200000.0", MaxLeverage: 5},
 				},
 			}},
 		},
