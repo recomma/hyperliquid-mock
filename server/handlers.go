@@ -448,8 +448,6 @@ func (h *Handler) HandleInfo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.logger.Debug("info request received", "request", req)
-
 	var response interface{}
 
 	switch req.Type {
@@ -469,10 +467,6 @@ func (h *Handler) HandleInfo(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-
-	// Log the JSON response for debugging
-	jsonBytes, _ := json.MarshalIndent(response, "", "  ")
-	h.logger.Debug("info response", "type", req.Type, "response", string(jsonBytes))
 
 	json.NewEncoder(w).Encode(response)
 }
