@@ -128,6 +128,36 @@ func TestHandleInfo_Meta(t *testing.T) {
 	t.Logf("✓ Meta response: %d assets, %d margin tables", len(response.Universe), len(response.MarginTables))
 }
 
+func TestProcessOrderRejectsIOCWithoutLiquidity(t *testing.T) {
+	handler := NewHandler()
+
+	orderMap := map[string]interface{}{
+		"a": float64(0),
+		"b": true,
+		"s": "1",
+		"p": "100",
+		"t": map[string]interface{}{
+			"limit": map[string]interface{}{
+				"tif": "Ioc",
+			},
+		},
+	}
+
+	status := handler.processOrder(orderMap)
+
+	if status.Resting != nil {
+		t.Fatalf("expected no resting order, got %#v", status.Resting)
+	}
+
+	if status.Error == nil {
+		t.Fatalf("expected error %q, got nil", ErrOrderIocCancel.Error())
+	}
+
+	if got, want := *status.Error, ErrOrderIocCancel.Error(); got != want {
+		t.Fatalf("unexpected error message: got %q want %q", got, want)
+	}
+}
+
 // TestHandleInfo_SpotMeta tests the /info endpoint with type "spotMeta"
 func TestHandleInfo_SpotMeta(t *testing.T) {
 	handler := NewHandler()
