@@ -128,7 +128,7 @@ func TestHandleInfo_Meta(t *testing.T) {
 	t.Logf("✓ Meta response: %d assets, %d margin tables", len(response.Universe), len(response.MarginTables))
 }
 
-func TestProcessOrderRejectsIOCWithoutLiquidity(t *testing.T) {
+func TestProcessOrderRejectsLowPriceBtcIOC(t *testing.T) {
 	handler := NewHandler()
 
 	orderMap := map[string]interface{}{
@@ -155,6 +155,32 @@ func TestProcessOrderRejectsIOCWithoutLiquidity(t *testing.T) {
 
 	if got, want := *status.Error, ErrOrderIocCancel.Error(); got != want {
 		t.Fatalf("unexpected error message: got %q want %q", got, want)
+	}
+}
+
+func TestProcessOrderAllowsOtherIocOrders(t *testing.T) {
+	handler := NewHandler()
+
+	orderMap := map[string]interface{}{
+		"a": float64(0),
+		"b": true,
+		"s": "0.01",
+		"p": "50000",
+		"t": map[string]interface{}{
+			"limit": map[string]interface{}{
+				"tif": "Ioc",
+			},
+		},
+	}
+
+	status := handler.processOrder(orderMap)
+
+	if status.Error != nil {
+		t.Fatalf("expected no error, got %q", *status.Error)
+	}
+
+	if status.Resting == nil {
+		t.Fatalf("expected resting order, got nil")
 	}
 }
 

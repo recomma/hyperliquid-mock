@@ -213,8 +213,10 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 	}
 
 	if tif := extractTimeInForce(orderMap); strings.EqualFold(tif, "ioc") {
-		errMsg := ErrOrderIocCancel.Error()
-		return OrderStatusResponse{Error: &errMsg}
+		if strings.EqualFold(coin, "BTC") && limitPx <= 100 {
+			errMsg := ErrOrderIocCancel.Error()
+			return OrderStatusResponse{Error: &errMsg}
+		}
 	}
 
 	// Create new order
