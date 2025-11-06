@@ -106,11 +106,13 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 // processOrder creates or modifies a single order
 func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusResponse {
 	// Handle both full field names and abbreviated format
-	// Abbreviated: a=asset, b=is_buy, c=cloid, p=price, s=size
+	// Abbreviated: a=asset, b=is_buy, c=cloid, o=oid, p=price, s=size
 	var coin string
 	var isBuy bool
 	var sz, limitPx float64
 	var cloid string
+	var oid int64
+	var hasOid bool
 
 	// Try abbreviated format first (used by go-hyperliquid)
 	if assetIdx, ok := orderMap["a"].(float64); ok {
@@ -120,6 +122,22 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		sz, _ = orderMap["s"].(float64)
 		limitPx, _ = orderMap["p"].(float64)
 		cloid, _ = orderMap["c"].(string)
+
+		// Check for oid (for modify operations)
+		if oidVal, ok := orderMap["o"].(float64); ok {
+			oid = int64(oidVal)
+			hasOid = true
+		} else if oidVal, ok := orderMap["o"].(string); ok {
+			// Parse hex string
+			if len(oidVal) > 2 && oidVal[:2] == "0x" {
+				oidVal = oidVal[2:]
+			}
+			parsed, err := strconv.ParseInt(oidVal, 16, 64)
+			if err == nil {
+				oid = parsed
+				hasOid = true
+			}
+		}
 	} else {
 		// Fall back to full field names
 		coin, _ = orderMap["coin"].(string)
@@ -127,6 +145,15 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		sz, _ = orderMap["sz"].(float64)
 		limitPx, _ = orderMap["limit_px"].(float64)
 		cloid, _ = orderMap["cloid"].(string)
+
+		// Check for oid
+		if oidVal, ok := orderMap["oid"].(int64); ok {
+			oid = oidVal
+			hasOid = true
+		} else if oidVal, ok := orderMap["oid"].(float64); ok {
+			oid = int64(oidVal)
+			hasOid = true
+		}
 	}
 
 	side := "B"
@@ -137,11 +164,31 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 	szStr := fmt.Sprintf("%.8g", sz)
 	pxStr := fmt.Sprintf("%.8g", limitPx)
 
-	// Check if this is a modification (cloid exists)
-	if cloid != "" {
-		if oid, ok := h.state.ModifyOrder(cloid, pxStr, szStr); ok {
+	// Check if this is a modification (has oid)
+	if hasOid {
+		if modifiedOid, ok := h.state.ModifyOrderByOid(oid, pxStr, szStr); ok {
+			// Get cloid for the response if it exists
+			if order, exists := h.state.GetOrderByOid(modifiedOid); exists && order.Order.Cloid != nil {
+				return OrderStatusResponse{
+					Resting: &RestingStatus{Oid: modifiedOid, Cloid: order.Order.Cloid},
+				}
+			}
 			return OrderStatusResponse{
-				Resting: &RestingStatus{Oid: oid, Cloid: &cloid},
+				Resting: &RestingStatus{Oid: modifiedOid},
+			}
+		}
+		// If we have an OID but the order wasn't found, return an error
+		errMsg := fmt.Sprintf("Order not found: oid=%d", oid)
+		return OrderStatusResponse{
+			Error: &errMsg,
+		}
+	}
+
+	// Check if this is a modification by cloid
+	if cloid != "" {
+		if modifiedOid, ok := h.state.ModifyOrder(cloid, pxStr, szStr); ok {
+			return OrderStatusResponse{
+				Resting: &RestingStatus{Oid: modifiedOid, Cloid: &cloid},
 			}
 		}
 	}
@@ -151,10 +198,10 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		cloid = fmt.Sprintf("mock-%d", time.Now().UnixNano())
 	}
 
-	oid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr)
+	newOid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr)
 
 	return OrderStatusResponse{
-		Resting: &RestingStatus{Oid: oid, Cloid: &cloid},
+		Resting: &RestingStatus{Oid: newOid, Cloid: &cloid},
 	}
 }
 

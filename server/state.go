@@ -48,7 +48,7 @@ func (s *State) CreateOrder(cloid string, coin string, side string, limitPx stri
 	return oid
 }
 
-// ModifyOrder updates an existing order
+// ModifyOrder updates an existing order by CLOID
 func (s *State) ModifyOrder(cloid string, limitPx string, sz string) (int64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -63,6 +63,24 @@ func (s *State) ModifyOrder(cloid string, limitPx string, sz string) (int64, boo
 	order.StatusTimestamp = time.Now().UnixMilli()
 
 	return order.Order.Oid, true
+}
+
+// ModifyOrderByOid updates an existing order by OID
+func (s *State) ModifyOrderByOid(oid int64, limitPx string, sz string) (int64, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Find order by OID
+	for _, order := range s.orders {
+		if order.Order.Oid == oid {
+			order.Order.LimitPx = limitPx
+			order.Order.Sz = sz
+			order.StatusTimestamp = time.Now().UnixMilli()
+			return order.Order.Oid, true
+		}
+	}
+
+	return 0, false
 }
 
 // CancelOrder marks an order as canceled
