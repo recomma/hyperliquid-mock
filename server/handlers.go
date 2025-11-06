@@ -3,7 +3,7 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"time"
@@ -11,13 +11,27 @@ import (
 
 // Handler manages HTTP requests for the mock server
 type Handler struct {
-	state *State
+	state  *State
+	logger *slog.Logger
 }
 
 // NewHandler creates a new request handler
-func NewHandler() *Handler {
+func NewHandler(opts ...Option) *Handler {
+	cfg := options{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&cfg)
+		}
+	}
+
+	logger := cfg.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	return &Handler{
-		state: NewState(),
+		state:  NewState(),
+		logger: logger,
 	}
 }
 
@@ -30,12 +44,12 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 
 	var req ExchangeRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Failed to decode exchange request: %v", err)
+		h.logger.Error("failed to decode exchange request", "error", err)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Exchange request: %+v", req)
+	h.logger.Debug("exchange request received", "request", req)
 
 	// Parse the action to determine the operation type
 	actionMap, ok := req.Action.(map[string]interface{})
@@ -73,6 +87,8 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
+	h.logger.Debug("exchange response", "response", response)
+
 	json.NewEncoder(w).Encode(response)
 }
 
@@ -427,12 +443,12 @@ func (h *Handler) HandleInfo(w http.ResponseWriter, r *http.Request) {
 
 	var req InfoRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		log.Printf("Failed to decode info request: %v", err)
+		h.logger.Error("failed to decode info request", "error", err)
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
 	}
 
-	log.Printf("Info request: %+v", req)
+	h.logger.Debug("info request received", "request", req)
 
 	var response interface{}
 
@@ -456,7 +472,7 @@ func (h *Handler) HandleInfo(w http.ResponseWriter, r *http.Request) {
 
 	// Log the JSON response for debugging
 	jsonBytes, _ := json.MarshalIndent(response, "", "  ")
-	log.Printf("Sending %s response:\n%s", req.Type, string(jsonBytes))
+	h.logger.Debug("info response", "type", req.Type, "response", string(jsonBytes))
 
 	json.NewEncoder(w).Encode(response)
 }

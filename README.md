@@ -250,6 +250,34 @@ func TestMyHyperliquidCode(t *testing.T) {
 }
 ```
 
+### Capturing Request/Response Logs
+
+You can provide your own [`slog`](https://pkg.go.dev/log/slog) logger to the test
+server to observe every request and response as they flow through the mock. This
+is especially useful when running with `DEBUG` level logging:
+
+```go
+import (
+    "context"
+    "crypto/ecdsa"
+    "log/slog"
+    "os"
+    "testing"
+
+    "github.com/ethereum/go-ethereum/crypto"
+    "github.com/recomma/hyperliquid-mock/server"
+    "github.com/sonirico/go-hyperliquid"
+)
+
+func TestMyHyperliquidCode(t *testing.T) {
+    logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+    ts := server.NewTestServer(t, server.WithLogger(logger))
+    defer ts.Close()
+
+    // ... use ts in your tests ...
+}
+```
+
 ### Test Isolation
 
 Each test gets its own server instance on a random port with isolated request history:
