@@ -50,8 +50,10 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 		switch order {
 		case "order":
 			response = h.handleOrder(actionMap)
-		case "cancel":
+		case "cancel", "cancelByCloid":
 			response = h.handleCancel(actionMap)
+		case "modify":
+			response = h.handleModify(actionMap)
 		case "batchModify":
 			response = h.handleBatchModify(actionMap)
 		default:
@@ -215,6 +217,79 @@ func (h *Handler) mapAssetIndexToCoin(index int) string {
 	return fmt.Sprintf("ASSET_%d", index)
 }
 
+// handleModify processes a single order modification
+func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
+	// Extract oid (can be numeric or hex string)
+	var oid int64
+	var hasOid bool
+
+	if oidVal, ok := action["oid"].(float64); ok {
+		oid = int64(oidVal)
+		hasOid = true
+	} else if oidVal, ok := action["oid"].(string); ok {
+		// Parse hex string or cloid
+		if len(oidVal) > 2 && oidVal[:2] == "0x" {
+			// Try to parse as hex OID
+			parsed, err := strconv.ParseInt(oidVal[2:], 16, 64)
+			if err == nil {
+				oid = parsed
+				hasOid = true
+			} else {
+				// It's a cloid, not an OID
+				// Try to find the order by cloid
+				if order, exists := h.state.GetOrder(oidVal); exists {
+					oid = order.Order.Oid
+					hasOid = true
+				}
+			}
+		}
+	}
+
+	if !hasOid {
+		errMsg := "Missing or invalid oid"
+		return ExchangeResponse{
+			Status: "ok",
+			Response: &ExchangeActionData{
+				Type: "order",
+				Data: map[string]interface{}{
+					"statuses": []OrderStatusResponse{{Error: &errMsg}},
+				},
+			},
+		}
+	}
+
+	// Extract the order object
+	orderMap, ok := action["order"].(map[string]interface{})
+	if !ok {
+		errMsg := "Missing order object"
+		return ExchangeResponse{
+			Status: "ok",
+			Response: &ExchangeActionData{
+				Type: "order",
+				Data: map[string]interface{}{
+					"statuses": []OrderStatusResponse{{Error: &errMsg}},
+				},
+			},
+		}
+	}
+
+	// Inject the oid into the order map so processOrder can handle it
+	orderMap["o"] = float64(oid)
+
+	// Process the modification
+	status := h.processOrder(orderMap)
+
+	return ExchangeResponse{
+		Status: "ok",
+		Response: &ExchangeActionData{
+			Type: "order",
+			Data: map[string]interface{}{
+				"statuses": []OrderStatusResponse{status},
+			},
+		},
+	}
+}
+
 // handleCancel processes order cancellation
 func (h *Handler) handleCancel(action map[string]interface{}) ExchangeResponse {
 	var statuses []interface{}
@@ -222,28 +297,54 @@ func (h *Handler) handleCancel(action map[string]interface{}) ExchangeResponse {
 	if cancels, ok := action["cancels"].([]interface{}); ok {
 		for _, c := range cancels {
 			cancelMap, _ := c.(map[string]interface{})
-			// Try abbreviated format (c = cloid) first
+
+			// Try to cancel by OID first (abbreviated: o)
+			if oidVal, ok := cancelMap["o"].(float64); ok {
+				oid := int64(oidVal)
+				if h.state.CancelOrderByOid(oid) {
+					statuses = append(statuses, "success")
+				} else {
+					statuses = append(statuses, map[string]interface{}{
+						"error": fmt.Sprintf("Order was never placed, already canceled, or filled. oid=%d", oid),
+					})
+				}
+				continue
+			}
+
+			// Try by cloid (abbreviated format: c)
 			cloid, ok := cancelMap["c"].(string)
 			if !ok {
-				// Fall back to full field name
+				// Fall back to full field names
 				cloid, _ = cancelMap["cloid"].(string)
 			}
 
 			if cloid != "" {
-				h.state.CancelOrder(cloid)
-				// Real API returns "success" string for successful cancels
-				statuses = append(statuses, "success")
+				if h.state.CancelOrder(cloid) {
+					statuses = append(statuses, "success")
+				} else {
+					statuses = append(statuses, map[string]interface{}{
+						"error": fmt.Sprintf("Order was never placed, already canceled, or filled. cloid=%s", cloid),
+					})
+				}
 			}
 		}
 	} else {
-		// Single cancel - try both formats
-		cloid, ok := action["c"].(string)
-		if !ok {
-			cloid, _ = action["cloid"].(string)
-		}
-		if cloid != "" {
-			h.state.CancelOrder(cloid)
-			statuses = append(statuses, "success")
+		// Single cancel - try both OID and cloid
+		if oidVal, ok := action["o"].(float64); ok {
+			oid := int64(oidVal)
+			if h.state.CancelOrderByOid(oid) {
+				statuses = append(statuses, "success")
+			}
+		} else {
+			cloid, ok := action["c"].(string)
+			if !ok {
+				cloid, _ = action["cloid"].(string)
+			}
+			if cloid != "" {
+				if h.state.CancelOrder(cloid) {
+					statuses = append(statuses, "success")
+				}
+			}
 		}
 	}
 

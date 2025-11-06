@@ -83,7 +83,7 @@ func (s *State) ModifyOrderByOid(oid int64, limitPx string, sz string) (int64, b
 	return 0, false
 }
 
-// CancelOrder marks an order as canceled
+// CancelOrder marks an order as canceled by CLOID
 func (s *State) CancelOrder(cloid string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -97,6 +97,23 @@ func (s *State) CancelOrder(cloid string) bool {
 	order.StatusTimestamp = time.Now().UnixMilli()
 
 	return true
+}
+
+// CancelOrderByOid marks an order as canceled by OID
+func (s *State) CancelOrderByOid(oid int64) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Find order by OID
+	for _, order := range s.orders {
+		if order.Order.Oid == oid {
+			order.Status = "canceled"
+			order.StatusTimestamp = time.Now().UnixMilli()
+			return true
+		}
+	}
+
+	return false
 }
 
 // GetOrder retrieves an order by cloid
