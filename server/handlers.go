@@ -121,8 +121,8 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		// Map asset index to coin name
 		coin = h.mapAssetIndexToCoin(int(assetIdx))
 		isBuy, _ = orderMap["b"].(bool)
-		sz, _ = orderMap["s"].(float64)
-		limitPx, _ = orderMap["p"].(float64)
+		sz = parseNumeric(orderMap["s"])
+		limitPx = parseNumeric(orderMap["p"])
 		cloid, _ = orderMap["c"].(string)
 
 		// Check for oid (for modify operations)
@@ -144,8 +144,8 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		// Fall back to full field names
 		coin, _ = orderMap["coin"].(string)
 		isBuy, _ = orderMap["is_buy"].(bool)
-		sz, _ = orderMap["sz"].(float64)
-		limitPx, _ = orderMap["limit_px"].(float64)
+		sz = parseNumeric(orderMap["sz"])
+		limitPx = parseNumeric(orderMap["limit_px"])
 		cloid, _ = orderMap["cloid"].(string)
 
 		// Check for oid
@@ -288,6 +288,28 @@ func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
 			},
 		},
 	}
+}
+
+// parseNumeric extracts a float64 from a variety of input types commonly used
+// in Hyperliquid payloads (numbers encoded as floats, strings, or json.Number).
+func parseNumeric(value interface{}) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case string:
+		if parsed, err := strconv.ParseFloat(v, 64); err == nil {
+			return parsed
+		}
+	case json.Number:
+		if parsed, err := v.Float64(); err == nil {
+			return parsed
+		}
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	}
+	return 0
 }
 
 // handleCancel processes order cancellation
@@ -444,8 +466,14 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 	var order *OrderDetail
 	var exists bool
 
+	if req.Oid != nil && !req.Oid.Valid() && req.Cloid == nil {
+		if raw := req.Oid.Raw(); raw != "" {
+			req.Cloid = &raw
+		}
+	}
+
 	// Try to query by OID first
-	if req.Oid != nil {
+	if req.Oid != nil && req.Oid.Valid() {
 		order, exists = h.state.GetOrderByOid(req.Oid.Int64())
 	} else if req.Cloid != nil && *req.Cloid != "" {
 		// Query by CLOID
@@ -461,7 +489,7 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 	}
 
 	return OrderQueryResult{
-		Status: "success",
+		Status: "order",
 		Order:  order,
 	}
 }
@@ -474,6 +502,30 @@ func (h *Handler) handleMetaAndAssetCtxs() MetaAndAssetCtxs {
 			{Name: "ETH", SzDecimals: 4},
 			{Name: "SOL", SzDecimals: 1},
 			{Name: "ARB", SzDecimals: 0},
+		},
+		MarginTables: [][]interface{}{
+			{
+				1,
+				map[string]interface{}{
+					"description": "Standard",
+					"marginTiers": []map[string]interface{}{
+						{"lowerBound": "0.0", "maxLeverage": 50},
+						{"lowerBound": "100000.0", "maxLeverage": 25},
+						{"lowerBound": "500000.0", "maxLeverage": 10},
+					},
+				},
+			},
+			{
+				2,
+				map[string]interface{}{
+					"description": "Alt Coins",
+					"marginTiers": []map[string]interface{}{
+						{"lowerBound": "0.0", "maxLeverage": 20},
+						{"lowerBound": "50000.0", "maxLeverage": 10},
+						{"lowerBound": "200000.0", "maxLeverage": 5},
+					},
+				},
+			},
 		},
 		AssetCtxs: []AssetCtx{
 			{

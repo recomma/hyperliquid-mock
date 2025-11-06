@@ -32,6 +32,8 @@ type CapturedRequest struct {
 type RequestCapture struct {
 	mu       sync.RWMutex
 	requests []CapturedRequest
+	skipMeta bool
+	metaLeft int
 }
 
 // NewRequestCapture creates a new request capture collector
@@ -54,16 +56,37 @@ func (rc *RequestCapture) Wrap(next http.Handler) http.Handler {
 		// Restore body for the actual handler
 		r.Body = io.NopCloser(bytes.NewBuffer(body))
 
-		// Capture the request
-		rc.mu.Lock()
-		rc.requests = append(rc.requests, CapturedRequest{
-			Method:    r.Method,
-			Path:      r.URL.Path,
-			Headers:   r.Header.Clone(),
-			Body:      append([]byte(nil), body...), // Deep copy
-			Timestamp: time.Now(),
-		})
-		rc.mu.Unlock()
+		shouldCapture := true
+		if rc.skipMeta && r.Method == http.MethodPost && r.URL.Path == "/info" {
+			var payload struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(body, &payload); err == nil {
+				if payload.Type == "meta" || payload.Type == "spotMeta" {
+					shouldCapture = false
+					rc.metaLeft--
+					if rc.metaLeft <= 0 {
+						rc.skipMeta = false
+					}
+				} else {
+					rc.skipMeta = false
+				}
+			} else {
+				rc.skipMeta = false
+			}
+		}
+
+		if shouldCapture {
+			rc.mu.Lock()
+			rc.requests = append(rc.requests, CapturedRequest{
+				Method:    r.Method,
+				Path:      r.URL.Path,
+				Headers:   r.Header.Clone(),
+				Body:      append([]byte(nil), body...), // Deep copy
+				Timestamp: time.Now(),
+			})
+			rc.mu.Unlock()
+		}
 
 		// Pass to actual handler
 		next.ServeHTTP(w, r)
@@ -93,6 +116,8 @@ func (rc *RequestCapture) Clear() {
 	rc.mu.Lock()
 	defer rc.mu.Unlock()
 	rc.requests = rc.requests[:0]
+	rc.skipMeta = true
+	rc.metaLeft = 2
 }
 
 // NewTestServer creates a new test server with automatic cleanup

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"strconv"
 )
 
@@ -36,42 +37,82 @@ type InfoRequest struct {
 	Cloid *string      `json:"cloid,omitempty"`
 }
 
-// FlexibleOid is a custom type that can unmarshal from string (hex) or int64
-type FlexibleOid int64
+// FlexibleOid captures order identifiers that can be provided either as raw
+// integers or as hex strings. The Valid flag tracks whether parsing succeeded.
+type FlexibleOid struct {
+	value int64
+	valid bool
+	raw   string
+}
 
-// UnmarshalJSON implements custom unmarshaling for FlexibleOid
+// UnmarshalJSON implements custom unmarshaling for FlexibleOid and gracefully
+// handles strings that do not represent an OID (e.g., CLOIDs provided in the
+// oid field by some clients).
 func (f *FlexibleOid) UnmarshalJSON(data []byte) error {
-	// Try to unmarshal as int64 first
+	// Try numeric forms first (int64 or json.Number)
 	var i int64
 	if err := json.Unmarshal(data, &i); err == nil {
-		*f = FlexibleOid(i)
+		f.value = i
+		f.valid = true
+		f.raw = ""
 		return nil
 	}
 
-	// Try to unmarshal as string (hex format)
+	// Try to unmarshal as string
 	var s string
 	if err := json.Unmarshal(data, &s); err != nil {
 		return err
 	}
+	f.raw = s
 
-	// Parse hex string (with or without 0x prefix)
-	if len(s) > 2 && s[:2] == "0x" {
-		s = s[2:]
+	// Remove optional 0x prefix before parsing
+	normalized := s
+	if len(normalized) > 2 && (normalized[:2] == "0x" || normalized[:2] == "0X") {
+		normalized = normalized[2:]
 	}
 
-	// Parse as hex
-	parsed, err := strconv.ParseInt(s, 16, 64)
-	if err != nil {
-		return err
+	// Attempt hexadecimal parsing
+	if parsed, err := strconv.ParseInt(normalized, 16, 64); err == nil {
+		f.value = parsed
+		f.valid = true
+		f.raw = s
+		return nil
 	}
 
-	*f = FlexibleOid(parsed)
+	// Attempt base-10 parsing for decimal strings
+	if parsed, err := strconv.ParseInt(normalized, 10, 64); err == nil {
+		f.value = parsed
+		f.valid = true
+		f.raw = s
+		return nil
+	}
+
+	// Treat other strings as non-OID values; keep the struct invalid so the
+	// caller can fall back to CLOID-based lookups without failing decode.
+	f.value = 0
+	f.valid = false
 	return nil
 }
 
-// Int64 returns the int64 value
+// Valid reports whether the OID was successfully parsed.
+func (f *FlexibleOid) Valid() bool {
+	return f != nil && f.valid
+}
+
+// Int64 returns the parsed OID value. Callers should check Valid() first.
 func (f *FlexibleOid) Int64() int64 {
-	return int64(*f)
+	if f == nil {
+		return 0
+	}
+	return f.value
+}
+
+// Raw returns the original string value when provided.
+func (f *FlexibleOid) Raw() string {
+	if f == nil {
+		return ""
+	}
+	return f.raw
 }
 
 // OrderQueryResult is the response for orderStatus queries
@@ -107,22 +148,23 @@ type MetaUniverse struct {
 
 // AssetCtx represents asset context information
 type AssetCtx struct {
-	Funding       string   `json:"funding"`
-	OpenInterest  string   `json:"openInterest"`
-	PrevDayPx     string   `json:"prevDayPx"`
-	DayNtlVlm     string   `json:"dayNtlVlm"`
-	Premium       string   `json:"premium"`
-	OraclePx      string   `json:"oraclePx"`
-	MarkPx        string   `json:"markPx"`
-	MidPx         string   `json:"midPx,omitempty"`
-	ImpactPxs     []string `json:"impactPxs,omitempty"`
+	Funding      string   `json:"funding"`
+	OpenInterest string   `json:"openInterest"`
+	PrevDayPx    string   `json:"prevDayPx"`
+	DayNtlVlm    string   `json:"dayNtlVlm"`
+	Premium      string   `json:"premium"`
+	OraclePx     string   `json:"oraclePx"`
+	MarkPx       string   `json:"markPx"`
+	MidPx        string   `json:"midPx,omitempty"`
+	ImpactPxs    []string `json:"impactPxs,omitempty"`
 }
 
 // MetaAndAssetCtxs is the response for metadata queries
 // The real API returns this as an array: [meta, assetCtxs]
 type MetaAndAssetCtxs struct {
-	Universe  []MetaUniverse `json:"universe"`
-	AssetCtxs []AssetCtx     `json:"assetCtxs"`
+	Universe     []MetaUniverse  `json:"universe"`
+	AssetCtxs    []AssetCtx      `json:"assetCtxs"`
+	MarginTables [][]interface{} `json:"marginTables,omitempty"`
 }
 
 // MarshalJSON implements custom JSON marshaling for MetaAndAssetCtxs
@@ -130,22 +172,55 @@ type MetaAndAssetCtxs struct {
 func (m MetaAndAssetCtxs) MarshalJSON() ([]byte, error) {
 	// Return as array: [meta, assetCtxs]
 	meta := struct {
-		Universe []MetaUniverse `json:"universe"`
+		Universe     []MetaUniverse  `json:"universe"`
+		MarginTables [][]interface{} `json:"marginTables,omitempty"`
 	}{
-		Universe: m.Universe,
+		Universe:     m.Universe,
+		MarginTables: m.MarginTables,
 	}
 
 	return json.Marshal([]interface{}{meta, m.AssetCtxs})
 }
 
+// UnmarshalJSON implements custom unmarshaling for MetaAndAssetCtxs to accept
+// the array response returned by the real API.
+func (m *MetaAndAssetCtxs) UnmarshalJSON(data []byte) error {
+	var raw []json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	if len(raw) != 2 {
+		return fmt.Errorf("expected 2 elements in metaAndAssetCtxs response, got %d", len(raw))
+	}
+
+	var metaPart struct {
+		Universe     []MetaUniverse  `json:"universe"`
+		MarginTables [][]interface{} `json:"marginTables,omitempty"`
+	}
+	if err := json.Unmarshal(raw[0], &metaPart); err != nil {
+		return err
+	}
+
+	var assetCtxs []AssetCtx
+	if err := json.Unmarshal(raw[1], &assetCtxs); err != nil {
+		return err
+	}
+
+	m.Universe = metaPart.Universe
+	m.MarginTables = metaPart.MarginTables
+	m.AssetCtxs = assetCtxs
+	return nil
+}
+
 // SpotToken represents a spot trading token
 type SpotToken struct {
-	Name         string `json:"name"`
-	SzDecimals   int    `json:"szDecimals"`
-	WeiDecimals  int    `json:"weiDecimals"`
-	Index        int    `json:"index"`
-	TokenId      string `json:"tokenId"`
-	IsCanonical  bool   `json:"isCanonical"`
+	Name        string `json:"name"`
+	SzDecimals  int    `json:"szDecimals"`
+	WeiDecimals int    `json:"weiDecimals"`
+	Index       int    `json:"index"`
+	TokenId     string `json:"tokenId"`
+	IsCanonical bool   `json:"isCanonical"`
 }
 
 // SpotUniverse represents a spot trading pair
@@ -166,6 +241,65 @@ type SpotMetaAndAssetCtxs struct {
 type Meta struct {
 	Universe     []AssetInfo     `json:"universe"`
 	MarginTables [][]interface{} `json:"marginTables,omitempty"`
+}
+
+// UnmarshalJSON normalizes the nested margin tables array so that nested
+// slices use map representations, matching the responses from the real API and
+// simplifying downstream type assertions in tests.
+func (m *Meta) UnmarshalJSON(data []byte) error {
+	type metaAlias struct {
+		Universe     []AssetInfo       `json:"universe"`
+		MarginTables []json.RawMessage `json:"marginTables"`
+	}
+
+	var tmp metaAlias
+	if err := json.Unmarshal(data, &tmp); err != nil {
+		return err
+	}
+
+	m.Universe = tmp.Universe
+	if len(tmp.MarginTables) == 0 {
+		m.MarginTables = nil
+		return nil
+	}
+
+	m.MarginTables = make([][]interface{}, 0, len(tmp.MarginTables))
+	for _, entry := range tmp.MarginTables {
+		var tuple []json.RawMessage
+		if err := json.Unmarshal(entry, &tuple); err != nil {
+			return err
+		}
+		if len(tuple) != 2 {
+			continue
+		}
+
+		var id interface{}
+		if err := json.Unmarshal(tuple[0], &id); err != nil {
+			return err
+		}
+
+		tableMap := make(map[string]interface{})
+		if err := json.Unmarshal(tuple[1], &tableMap); err != nil {
+			return err
+		}
+
+		if tiersRaw, ok := tableMap["marginTiers"]; ok {
+			switch tiers := tiersRaw.(type) {
+			case []interface{}:
+				converted := make([]map[string]interface{}, 0, len(tiers))
+				for _, tier := range tiers {
+					if tierMap, ok := tier.(map[string]interface{}); ok {
+						converted = append(converted, tierMap)
+					}
+				}
+				tableMap["marginTiers"] = converted
+			}
+		}
+
+		m.MarginTables = append(m.MarginTables, []interface{}{id, tableMap})
+	}
+
+	return nil
 }
 
 // AssetInfo contains basic asset information for the meta endpoint
