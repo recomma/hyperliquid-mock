@@ -105,11 +105,29 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 
 // processOrder creates or modifies a single order
 func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusResponse {
-	coin, _ := orderMap["coin"].(string)
-	isBuy, _ := orderMap["is_buy"].(bool)
-	sz, _ := orderMap["sz"].(float64)
-	limitPx, _ := orderMap["limit_px"].(float64)
-	cloid, _ := orderMap["cloid"].(string)
+	// Handle both full field names and abbreviated format
+	// Abbreviated: a=asset, b=is_buy, c=cloid, p=price, s=size
+	var coin string
+	var isBuy bool
+	var sz, limitPx float64
+	var cloid string
+
+	// Try abbreviated format first (used by go-hyperliquid)
+	if assetIdx, ok := orderMap["a"].(float64); ok {
+		// Map asset index to coin name
+		coin = h.mapAssetIndexToCoin(int(assetIdx))
+		isBuy, _ = orderMap["b"].(bool)
+		sz, _ = orderMap["s"].(float64)
+		limitPx, _ = orderMap["p"].(float64)
+		cloid, _ = orderMap["c"].(string)
+	} else {
+		// Fall back to full field names
+		coin, _ = orderMap["coin"].(string)
+		isBuy, _ = orderMap["is_buy"].(bool)
+		sz, _ = orderMap["sz"].(float64)
+		limitPx, _ = orderMap["limit_px"].(float64)
+		cloid, _ = orderMap["cloid"].(string)
+	}
 
 	side := "B"
 	if !isBuy {
@@ -140,6 +158,16 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 	}
 }
 
+// mapAssetIndexToCoin maps an asset index to a coin name
+func (h *Handler) mapAssetIndexToCoin(index int) string {
+	// Standard mapping based on common perpetual futures order
+	assets := []string{"BTC", "ETH", "SOL", "ARB"}
+	if index >= 0 && index < len(assets) {
+		return assets[index]
+	}
+	return fmt.Sprintf("ASSET_%d", index)
+}
+
 // handleCancel processes order cancellation
 func (h *Handler) handleCancel(action map[string]interface{}) ExchangeResponse {
 	var statuses []interface{}
@@ -147,7 +175,12 @@ func (h *Handler) handleCancel(action map[string]interface{}) ExchangeResponse {
 	if cancels, ok := action["cancels"].([]interface{}); ok {
 		for _, c := range cancels {
 			cancelMap, _ := c.(map[string]interface{})
-			cloid, _ := cancelMap["cloid"].(string)
+			// Try abbreviated format (c = cloid) first
+			cloid, ok := cancelMap["c"].(string)
+			if !ok {
+				// Fall back to full field name
+				cloid, _ = cancelMap["cloid"].(string)
+			}
 
 			if cloid != "" {
 				h.state.CancelOrder(cloid)
@@ -156,8 +189,11 @@ func (h *Handler) handleCancel(action map[string]interface{}) ExchangeResponse {
 			}
 		}
 	} else {
-		// Single cancel
-		cloid, _ := action["cloid"].(string)
+		// Single cancel - try both formats
+		cloid, ok := action["c"].(string)
+		if !ok {
+			cloid, _ = action["cloid"].(string)
+		}
 		if cloid != "" {
 			h.state.CancelOrder(cloid)
 			statuses = append(statuses, "success")
@@ -260,8 +296,12 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 	var order *OrderDetail
 	var exists bool
 
+	// Try to query by OID first
 	if req.Oid != nil {
-		order, exists = h.state.GetOrderByOid(*req.Oid)
+		order, exists = h.state.GetOrderByOid(req.Oid.Int64())
+	} else if req.Cloid != nil && *req.Cloid != "" {
+		// Query by CLOID
+		order, exists = h.state.GetOrder(*req.Cloid)
 	} else if req.User != "" {
 		// In a real implementation, we'd filter by user
 		// For the mock, we just return unknown
@@ -358,20 +398,20 @@ func (h *Handler) handleMeta() Meta {
 		},
 		// MarginTables is an array of tuples: [[id, {description, marginTiers}], ...]
 		MarginTables: [][]interface{}{
-			{1, map[string]interface{}{
-				"description": "Standard",
-				"marginTiers": []map[string]interface{}{
-					{"lowerBound": "0.0", "maxLeverage": 50},
-					{"lowerBound": "100000.0", "maxLeverage": 25},
-					{"lowerBound": "500000.0", "maxLeverage": 10},
+			{1, MarginTable{
+				Description: "Standard",
+				MarginTiers: []MarginTier{
+					{LowerBound: "0.0", MaxLeverage: 50},
+					{LowerBound: "100000.0", MaxLeverage: 25},
+					{LowerBound: "500000.0", MaxLeverage: 10},
 				},
 			}},
-			{2, map[string]interface{}{
-				"description": "Alt Coins",
-				"marginTiers": []map[string]interface{}{
-					{"lowerBound": "0.0", "maxLeverage": 20},
-					{"lowerBound": "50000.0", "maxLeverage": 10},
-					{"lowerBound": "200000.0", "maxLeverage": 5},
+			{2, MarginTable{
+				Description: "Alt Coins",
+				MarginTiers: []MarginTier{
+					{LowerBound: "0.0", MaxLeverage: 20},
+					{LowerBound: "50000.0", MaxLeverage: 10},
+					{LowerBound: "200000.0", MaxLeverage: 5},
 				},
 			}},
 		},

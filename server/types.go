@@ -1,5 +1,10 @@
 package server
 
+import (
+	"encoding/json"
+	"strconv"
+)
+
 // ExchangeRequest represents a request to the /exchange endpoint
 type ExchangeRequest struct {
 	Action    interface{} `json:"action"`
@@ -25,9 +30,48 @@ type ExchangeActionData struct {
 
 // InfoRequest represents a request to the /info endpoint
 type InfoRequest struct {
-	Type string `json:"type"`
-	User string `json:"user,omitempty"`
-	Oid  *int64 `json:"oid,omitempty"`
+	Type  string       `json:"type"`
+	User  string       `json:"user,omitempty"`
+	Oid   *FlexibleOid `json:"oid,omitempty"`
+	Cloid *string      `json:"cloid,omitempty"`
+}
+
+// FlexibleOid is a custom type that can unmarshal from string (hex) or int64
+type FlexibleOid int64
+
+// UnmarshalJSON implements custom unmarshaling for FlexibleOid
+func (f *FlexibleOid) UnmarshalJSON(data []byte) error {
+	// Try to unmarshal as int64 first
+	var i int64
+	if err := json.Unmarshal(data, &i); err == nil {
+		*f = FlexibleOid(i)
+		return nil
+	}
+
+	// Try to unmarshal as string (hex format)
+	var s string
+	if err := json.Unmarshal(data, &s); err != nil {
+		return err
+	}
+
+	// Parse hex string (with or without 0x prefix)
+	if len(s) > 2 && s[:2] == "0x" {
+		s = s[2:]
+	}
+
+	// Parse as hex
+	parsed, err := strconv.ParseInt(s, 16, 64)
+	if err != nil {
+		return err
+	}
+
+	*f = FlexibleOid(parsed)
+	return nil
+}
+
+// Int64 returns the int64 value
+func (f *FlexibleOid) Int64() int64 {
+	return int64(*f)
 }
 
 // OrderQueryResult is the response for orderStatus queries
@@ -75,9 +119,23 @@ type AssetCtx struct {
 }
 
 // MetaAndAssetCtxs is the response for metadata queries
+// The real API returns this as an array: [meta, assetCtxs]
 type MetaAndAssetCtxs struct {
 	Universe  []MetaUniverse `json:"universe"`
 	AssetCtxs []AssetCtx     `json:"assetCtxs"`
+}
+
+// MarshalJSON implements custom JSON marshaling for MetaAndAssetCtxs
+// The real Hyperliquid API returns this as a 2-element array, not an object
+func (m MetaAndAssetCtxs) MarshalJSON() ([]byte, error) {
+	// Return as array: [meta, assetCtxs]
+	meta := struct {
+		Universe []MetaUniverse `json:"universe"`
+	}{
+		Universe: m.Universe,
+	}
+
+	return json.Marshal([]interface{}{meta, m.AssetCtxs})
 }
 
 // SpotToken represents a spot trading token
