@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -211,6 +212,13 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		}
 	}
 
+	if tif := extractTimeInForce(orderMap); strings.EqualFold(tif, "ioc") {
+		if strings.EqualFold(coin, "BTC") && limitPx <= 100 {
+			errMsg := ErrOrderIocCancel.Error()
+			return OrderStatusResponse{Error: &errMsg}
+		}
+	}
+
 	// Create new order
 	if cloid == "" {
 		cloid = fmt.Sprintf("mock-%d", time.Now().UnixNano())
@@ -221,6 +229,30 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 	return OrderStatusResponse{
 		Resting: &RestingStatus{Oid: newOid, Cloid: &cloid},
 	}
+}
+
+func extractTimeInForce(orderMap map[string]interface{}) string {
+	if tRaw, ok := orderMap["t"]; ok {
+		if tMap, ok := tRaw.(map[string]interface{}); ok {
+			if limitRaw, ok := tMap["limit"]; ok {
+				if limitMap, ok := limitRaw.(map[string]interface{}); ok {
+					if tif, ok := limitMap["tif"].(string); ok {
+						return tif
+					}
+				}
+			}
+		}
+	}
+
+	if tif, ok := orderMap["tif"].(string); ok {
+		return tif
+	}
+
+	if tif, ok := orderMap["timeInForce"].(string); ok {
+		return tif
+	}
+
+	return ""
 }
 
 // mapAssetIndexToCoin maps an asset index to a coin name
