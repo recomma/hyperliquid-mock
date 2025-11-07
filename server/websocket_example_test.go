@@ -10,8 +10,8 @@ import (
 	"github.com/recomma/hyperliquid-mock/server"
 )
 
-// Example demonstrating WebSocket order updates subscription
-func ExampleWebSocketOrderUpdates(t *testing.T) {
+// TestWebSocketOrderUpdates demonstrates WebSocket order updates subscription
+func TestWebSocketOrderUpdates(t *testing.T) {
 	ts := server.NewTestServer(t)
 	defer ts.Close()
 
@@ -51,8 +51,8 @@ func ExampleWebSocketOrderUpdates(t *testing.T) {
 	fmt.Println("WebSocket orderUpdates subscription working!")
 }
 
-// Example demonstrating WebSocket BBO subscription
-func ExampleWebSocketBBO(t *testing.T) {
+// TestWebSocketBBO demonstrates WebSocket BBO subscription
+func TestWebSocketBBO(t *testing.T) {
 	ts := server.NewTestServer(t)
 	defer ts.Close()
 
@@ -112,8 +112,8 @@ func ExampleWebSocketBBO(t *testing.T) {
 	fmt.Println("WebSocket BBO subscription working!")
 }
 
-// Example demonstrating manual BBO updates
-func ExampleManualBBOUpdate(t *testing.T) {
+// TestManualBBOUpdate demonstrates manual BBO updates
+func TestManualBBOUpdate(t *testing.T) {
 	ts := server.NewTestServer(t)
 	defer ts.Close()
 
