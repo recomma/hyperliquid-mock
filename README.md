@@ -333,6 +333,33 @@ if exists {
 order, exists := ts.GetOrderByOid(1000001)
 ```
 
+### Simulating Fills in Tests
+
+The `FillOrder` helper mutates the in-memory order state that powers `/info`
+responses, letting you simulate trade executions directly from your tests.
+
+```go
+// Simulate a full fill at 3025.50 (remaining size defaults to zero)
+if err := ts.FillOrder(cloid, 3025.50); err != nil {
+    t.Fatalf("FillOrder failed: %v", err)
+}
+
+// Later, /info orderStatus will report the order as filled with size 0
+order, _ := ts.GetOrder(cloid)
+fmt.Println(order.Status)     // "filled"
+fmt.Println(order.Order.Sz)   // "0"
+fmt.Println(order.Order.LimitPx) // "3025.5"
+
+// Simulate a partial fill by specifying the filled quantity
+if err := ts.FillOrder(cloid, 2999.25, server.WithFillSize(0.4)); err != nil {
+    t.Fatalf("FillOrder failed: %v", err)
+}
+
+order, _ = ts.GetOrder(cloid)
+fmt.Println(order.Status)    // "open" (still has remaining size)
+fmt.Println(order.Order.Sz)  // "0.6" (remaining amount)
+```
+
 ### Clear Request History
 
 Clear captured requests between test phases:
