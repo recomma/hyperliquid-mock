@@ -8,9 +8,10 @@ import (
 
 // State manages the mock server's in-memory order state
 type State struct {
-	mu        sync.RWMutex
-	orders    map[string]*OrderDetail // cloid -> OrderDetail
-	nextOid   int64
+	mu      sync.RWMutex
+	orders  map[string]*OrderDetail // cloid -> OrderDetail
+	nextOid int64
+	wsm     *WebSocketManager // For broadcasting order updates
 }
 
 // NewState creates a new state manager
@@ -19,6 +20,11 @@ func NewState() *State {
 		orders:  make(map[string]*OrderDetail),
 		nextOid: 1000000, // Start with a high OID to look realistic
 	}
+}
+
+// SetWebSocketManager sets the WebSocket manager for broadcasting updates
+func (s *State) SetWebSocketManager(wsm *WebSocketManager) {
+	s.wsm = wsm
 }
 
 // CreateOrder adds a new order to the state
@@ -45,6 +51,14 @@ func (s *State) CreateOrder(cloid string, coin string, side string, limitPx stri
 	}
 
 	s.orders[cloid] = order
+
+	// Broadcast order update via WebSocket
+	if s.wsm != nil {
+		// Note: In a real system, we'd track which user owns which order
+		// For the mock, we use a placeholder user address
+		s.wsm.BroadcastOrderUpdate("", order)
+	}
+
 	return oid
 }
 
@@ -62,6 +76,11 @@ func (s *State) ModifyOrder(cloid string, limitPx string, sz string) (int64, boo
 	order.Order.Sz = sz
 	order.StatusTimestamp = time.Now().UnixMilli()
 
+	// Broadcast order update via WebSocket
+	if s.wsm != nil {
+		s.wsm.BroadcastOrderUpdate("", order)
+	}
+
 	return order.Order.Oid, true
 }
 
@@ -76,6 +95,12 @@ func (s *State) ModifyOrderByOid(oid int64, limitPx string, sz string) (int64, b
 			order.Order.LimitPx = limitPx
 			order.Order.Sz = sz
 			order.StatusTimestamp = time.Now().UnixMilli()
+
+			// Broadcast order update via WebSocket
+			if s.wsm != nil {
+				s.wsm.BroadcastOrderUpdate("", order)
+			}
+
 			return order.Order.Oid, true
 		}
 	}
@@ -96,6 +121,11 @@ func (s *State) CancelOrder(cloid string) bool {
 	order.Status = "canceled"
 	order.StatusTimestamp = time.Now().UnixMilli()
 
+	// Broadcast order update via WebSocket
+	if s.wsm != nil {
+		s.wsm.BroadcastOrderUpdate("", order)
+	}
+
 	return true
 }
 
@@ -109,6 +139,12 @@ func (s *State) CancelOrderByOid(oid int64) bool {
 		if order.Order.Oid == oid {
 			order.Status = "canceled"
 			order.StatusTimestamp = time.Now().UnixMilli()
+
+			// Broadcast order update via WebSocket
+			if s.wsm != nil {
+				s.wsm.BroadcastOrderUpdate("", order)
+			}
+
 			return true
 		}
 	}

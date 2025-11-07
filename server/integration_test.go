@@ -155,7 +155,7 @@ func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 		Order: hyperliquid.CreateOrderRequest{
 			Coin:  "BTC",
 			IsBuy: true,
-			Size:  0.75, // Changed size
+			Size:  0.75,    // Changed size
 			Price: 51000.0, // Changed price
 			OrderType: hyperliquid.OrderType{
 				Limit: &hyperliquid.LimitOrderType{Tif: hyperliquid.TifGtc},

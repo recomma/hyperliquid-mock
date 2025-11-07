@@ -6,6 +6,7 @@ A minimal Go implementation of the Hyperliquid API for E2E testing without requi
 
 - **No authentication validation** - Accepts all requests without signature verification
 - **In-memory order state** - Tracks orders for realistic responses
+- **WebSocket support** - Real-time order updates and market data (BBO)
 - **Unlimited requests** - No rate limiting
 - **Simple responses** - Returns success for all valid operations
 
@@ -83,6 +84,31 @@ The `upstream-api-docs/` directory contains documentation for the real Hyperliqu
 All other action types return a generic success response but do not implement real functionality.
 
 ## Endpoints
+
+### WebSocket /ws
+
+Real-time data streaming for order updates and market data. See [WEBSOCKET.md](WEBSOCKET.md) for detailed documentation.
+
+**Supported subscriptions:**
+- `orderUpdates` - Real-time order status updates
+- `l2Book` / `bbo` - Best bid/offer market data
+
+**Example connection:**
+```javascript
+const ws = new WebSocket('ws://localhost:8080/ws');
+
+ws.onopen = () => {
+  ws.send(JSON.stringify({
+    method: 'subscribe',
+    subscription: { type: 'orderUpdates', user: '0x1234...' }
+  }));
+};
+
+ws.onmessage = (event) => {
+  const update = JSON.parse(event.data);
+  console.log('Order update:', update);
+};
+```
 
 ### POST /exchange
 
@@ -423,7 +449,7 @@ curl -X POST http://localhost:8080/info \
 
 - **No signature validation** - All requests are accepted regardless of signature
 - **No real order matching** - Orders are just stored in memory
-- **No WebSocket support** - Only HTTP REST endpoints
+- **Limited WebSocket subscriptions** - Only orderUpdates and l2Book/bbo (no trades, candles, etc.)
 - **Simplified responses** - Some fields may be omitted or simplified
 - **No persistence** - All state is lost when the server restarts
 - **No rate limiting** - Unlimited requests accepted
@@ -438,15 +464,20 @@ hyperliquid-mock/
 ├── go.mod                     # Go module file
 ├── go.sum                     # Go dependencies
 ├── README.md                  # This file
+├── WEBSOCKET.md               # WebSocket API documentation
 ├── upstream-api-docs/         # Real Hyperliquid API reference (for expansion)
 │   ├── exchange-endpoint.md
 │   ├── info-endpoint.md
 │   ├── perpetuals.md
-│   └── spot.md
+│   ├── spot.md
+│   ├── websocket.md
+│   └── subscriptions.md
 └── server/
     ├── server.go              # HTTP server setup
     ├── handlers.go            # Request handlers
     ├── handlers_test.go       # Handler unit tests
+    ├── websocket.go           # WebSocket connection & subscription management
+    ├── websocket_example_test.go  # WebSocket usage examples
     ├── types.go               # Request/response types
     ├── state.go               # In-memory state management
     ├── testserver.go          # Test helpers & request capture
