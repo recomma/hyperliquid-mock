@@ -21,11 +21,18 @@ func Run(addr string) error {
 	loggedMux := loggingMiddleware(logger, mux)
 
 	logger.Info("Mock Hyperliquid API server listening", "addr", addr)
+
+	// Format WebSocket URL properly (addr is typically ":8080" without protocol)
+	wsAddr := addr
+	if len(addr) > 0 && addr[0] == ':' {
+		wsAddr = "localhost" + addr
+	}
+
 	logger.Info("Endpoints",
 		"exchange", addr+"/exchange",
 		"info", addr+"/info",
 		"health", addr+"/health",
-		"websocket", "ws://"+addr[7:]+"/ws")
+		"websocket", "ws://"+wsAddr+"/ws")
 
 	return http.ListenAndServe(addr, loggedMux)
 }
