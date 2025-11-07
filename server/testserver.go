@@ -3,10 +3,13 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +21,21 @@ type TestServer struct {
 	handler    *Handler
 	capture    *RequestCapture
 	t          *testing.T
+}
+
+type fillArgs struct {
+	fillSize *float64
+}
+
+// FillOption configures FillOrder behaviour.
+type FillOption func(*fillArgs)
+
+// WithFillSize requests a specific fill size. The requested size will be
+// clamped to the order's remaining quantity.
+func WithFillSize(sz float64) FillOption {
+	return func(args *fillArgs) {
+		args.fillSize = &sz
+	}
 }
 
 // CapturedRequest stores details about a request received by the mock server
@@ -286,4 +304,62 @@ func (ts *TestServer) GetOrder(cloid string) (*OrderDetail, bool) {
 // GetOrderByOid returns a stored order by OID for assertions
 func (ts *TestServer) GetOrderByOid(oid int64) (*OrderDetail, bool) {
 	return ts.handler.state.GetOrderByOid(oid)
+}
+
+// FillOrder applies a fill to an order tracked by the mock server. The fill
+// amount defaults to the order's remaining size and can be overridden via
+// FillOption helpers.
+func (ts *TestServer) FillOrder(cloid string, fillPrice float64, opts ...FillOption) error {
+	if ts == nil || ts.handler == nil || ts.handler.state == nil {
+		return fmt.Errorf("test server not initialized")
+	}
+
+	args := &fillArgs{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(args)
+		}
+	}
+
+	state := ts.handler.state
+	state.mu.Lock()
+	defer state.mu.Unlock()
+
+	order, exists := state.orders[cloid]
+	if !exists {
+		return fmt.Errorf("unknown cloid %s", cloid)
+	}
+
+	remaining, err := strconv.ParseFloat(order.Order.Sz, 64)
+	if err != nil {
+		return fmt.Errorf("parse remaining size %q: %w", order.Order.Sz, err)
+	}
+
+	fillAmount := remaining
+	if args.fillSize != nil {
+		fillAmount = *args.fillSize
+	}
+
+	if fillAmount < 0 {
+		fillAmount = 0
+	}
+	if fillAmount > remaining {
+		fillAmount = remaining
+	}
+
+	newRemaining := remaining - fillAmount
+	if math.Abs(newRemaining) < 1e-12 {
+		newRemaining = 0
+	}
+
+	order.Order.Sz = strconv.FormatFloat(newRemaining, 'f', -1, 64)
+	order.Order.LimitPx = strconv.FormatFloat(fillPrice, 'f', -1, 64)
+	if newRemaining == 0 {
+		order.Status = "filled"
+	} else {
+		order.Status = "open"
+	}
+	order.StatusTimestamp = time.Now().UnixMilli()
+
+	return nil
 }

@@ -172,6 +172,78 @@ func TestMultipleOrders(t *testing.T) {
 	}
 }
 
+func TestTestServerFillOrder(t *testing.T) {
+	t.Run("full fill", func(t *testing.T) {
+		ts := server.NewTestServer(t)
+
+		makeExchangeRequest(t, ts.URL(), "BTC", 1.0, 50000.0)
+		cloid := extractCloid(t, ts)
+
+		if err := ts.FillOrder(cloid, 50500.5); err != nil {
+			t.Fatalf("FillOrder returned error: %v", err)
+		}
+
+		result := queryOrderStatus(t, ts.URL(), cloid)
+
+		if result.Status != "order" {
+			t.Fatalf("expected order status response, got %s", result.Status)
+		}
+		if result.Order == nil {
+			t.Fatal("expected order detail in response")
+		}
+		if result.Order.Status != "filled" {
+			t.Fatalf("expected filled status, got %s", result.Order.Status)
+		}
+		if result.Order.Order.Sz != "0" {
+			t.Fatalf("expected size 0, got %s", result.Order.Order.Sz)
+		}
+		if result.Order.Order.OrigSz != "1" {
+			t.Fatalf("expected orig size 1, got %s", result.Order.Order.OrigSz)
+		}
+		if result.Order.Order.LimitPx != "50500.5" {
+			t.Fatalf("expected limit px 50500.5, got %s", result.Order.Order.LimitPx)
+		}
+		if result.Order.StatusTimestamp == 0 {
+			t.Fatal("expected status timestamp to be set")
+		}
+	})
+
+	t.Run("partial fill", func(t *testing.T) {
+		ts := server.NewTestServer(t)
+
+		makeExchangeRequest(t, ts.URL(), "ETH", 1.0, 3000.0)
+		cloid := extractCloid(t, ts)
+
+		if err := ts.FillOrder(cloid, 2999.25, server.WithFillSize(0.4)); err != nil {
+			t.Fatalf("FillOrder returned error: %v", err)
+		}
+
+		result := queryOrderStatus(t, ts.URL(), cloid)
+
+		if result.Status != "order" {
+			t.Fatalf("expected order status response, got %s", result.Status)
+		}
+		if result.Order == nil {
+			t.Fatal("expected order detail in response")
+		}
+		if result.Order.Status != "open" {
+			t.Fatalf("expected open status after partial fill, got %s", result.Order.Status)
+		}
+		if result.Order.Order.Sz != "0.6" {
+			t.Fatalf("expected remaining size 0.6, got %s", result.Order.Order.Sz)
+		}
+		if result.Order.Order.OrigSz != "1" {
+			t.Fatalf("expected orig size 1, got %s", result.Order.Order.OrigSz)
+		}
+		if result.Order.Order.LimitPx != "2999.25" {
+			t.Fatalf("expected limit px 2999.25, got %s", result.Order.Order.LimitPx)
+		}
+		if result.Order.StatusTimestamp == 0 {
+			t.Fatal("expected status timestamp to be set")
+		}
+	})
+}
+
 // TestRawRequestInspection demonstrates low-level request inspection
 func TestRawRequestInspection(t *testing.T) {
 	ts := server.NewTestServer(t)
@@ -275,4 +347,66 @@ func makeInfoRequest(t *testing.T, baseURL, reqType string) {
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("Expected status 200, got %d", resp.StatusCode)
 	}
+}
+
+func queryOrderStatus(t *testing.T, baseURL, cloid string) server.OrderQueryResult {
+	t.Helper()
+
+	payload := map[string]interface{}{
+		"type":  "orderStatus",
+		"cloid": cloid,
+	}
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	resp, err := http.Post(baseURL+"/info", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("Failed to make request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d", resp.StatusCode)
+	}
+
+	var result server.OrderQueryResult
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatalf("Failed to decode response: %v", err)
+	}
+
+	return result
+}
+
+func extractCloid(t *testing.T, ts *server.TestServer) string {
+	t.Helper()
+
+	exchangeReqs := ts.GetExchangeRequests()
+	if len(exchangeReqs) == 0 {
+		t.Fatal("No exchange requests captured")
+	}
+
+	actionMap, ok := exchangeReqs[len(exchangeReqs)-1].Action.(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected action to be a map")
+	}
+
+	orders, ok := actionMap["orders"].([]interface{})
+	if !ok || len(orders) == 0 {
+		t.Fatal("Expected orders array in action")
+	}
+
+	order, ok := orders[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("Expected order to be a map")
+	}
+
+	cloid, ok := order["cloid"].(string)
+	if !ok {
+		t.Fatal("Expected cloid to be a string")
+	}
+
+	return cloid
 }
