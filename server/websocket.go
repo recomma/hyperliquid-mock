@@ -42,8 +42,8 @@ type SubscriptionResponse struct {
 }
 
 // OrderUpdate represents an order state change to broadcast
+// For the mock server, we broadcast to all subscribers
 type OrderUpdate struct {
-	User   string
 	Orders []WsOrder
 }
 
@@ -309,7 +309,8 @@ func (wsm *WebSocketManager) sendJSON(conn *websocket.Conn, v interface{}) {
 }
 
 // BroadcastOrderUpdate queues an order update for broadcasting
-func (wsm *WebSocketManager) BroadcastOrderUpdate(user string, order *OrderDetail) {
+// In the mock server, we broadcast to all orderUpdates subscribers
+func (wsm *WebSocketManager) BroadcastOrderUpdate(order *OrderDetail) {
 	if order == nil {
 		return
 	}
@@ -330,7 +331,6 @@ func (wsm *WebSocketManager) BroadcastOrderUpdate(user string, order *OrderDetai
 	}
 
 	update := OrderUpdate{
-		User:   user,
 		Orders: []WsOrder{wsOrder},
 	}
 
@@ -342,12 +342,14 @@ func (wsm *WebSocketManager) BroadcastOrderUpdate(user string, order *OrderDetai
 }
 
 // broadcastOrderUpdates broadcasts order updates to subscribed clients
+// In the mock server, we broadcast to all orderUpdates subscribers
 func (wsm *WebSocketManager) broadcastOrderUpdates() {
 	for update := range wsm.orderUpdatesCh {
 		wsm.mu.RLock()
 		for conn, state := range wsm.connections {
 			state.mu.RLock()
-			if state.orderUpdatesUser == update.User {
+			// In the mock, broadcast to anyone subscribed to orderUpdates
+			if state.orderUpdatesUser != "" {
 				state.mu.RUnlock()
 				msg := map[string]interface{}{
 					"channel": "orderUpdates",

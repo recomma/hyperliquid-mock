@@ -380,7 +380,7 @@ func (ts *TestServer) FillOrder(cloid string, fillPrice float64, opts ...FillOpt
 
 	// Broadcast fill update via WebSocket
 	if state.wsm != nil {
-		state.wsm.BroadcastOrderUpdate("", order)
+		state.wsm.BroadcastOrderUpdate(order)
 	}
 
 	return nil

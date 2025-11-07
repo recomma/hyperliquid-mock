@@ -54,9 +54,7 @@ func (s *State) CreateOrder(cloid string, coin string, side string, limitPx stri
 
 	// Broadcast order update via WebSocket
 	if s.wsm != nil {
-		// Note: In a real system, we'd track which user owns which order
-		// For the mock, we use a placeholder user address
-		s.wsm.BroadcastOrderUpdate("", order)
+		s.wsm.BroadcastOrderUpdate(order)
 	}
 
 	return oid
@@ -78,7 +76,7 @@ func (s *State) ModifyOrder(cloid string, limitPx string, sz string) (int64, boo
 
 	// Broadcast order update via WebSocket
 	if s.wsm != nil {
-		s.wsm.BroadcastOrderUpdate("", order)
+		s.wsm.BroadcastOrderUpdate(order)
 	}
 
 	return order.Order.Oid, true
@@ -98,7 +96,7 @@ func (s *State) ModifyOrderByOid(oid int64, limitPx string, sz string) (int64, b
 
 			// Broadcast order update via WebSocket
 			if s.wsm != nil {
-				s.wsm.BroadcastOrderUpdate("", order)
+				s.wsm.BroadcastOrderUpdate(order)
 			}
 
 			return order.Order.Oid, true
@@ -123,7 +121,7 @@ func (s *State) CancelOrder(cloid string) bool {
 
 	// Broadcast order update via WebSocket
 	if s.wsm != nil {
-		s.wsm.BroadcastOrderUpdate("", order)
+		s.wsm.BroadcastOrderUpdate(order)
 	}
 
 	return true
@@ -142,7 +140,7 @@ func (s *State) CancelOrderByOid(oid int64) bool {
 
 			// Broadcast order update via WebSocket
 			if s.wsm != nil {
-				s.wsm.BroadcastOrderUpdate("", order)
+				s.wsm.BroadcastOrderUpdate(order)
 			}
 
 			return true
