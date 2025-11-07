@@ -161,11 +161,12 @@ func TestProcessOrderRejectsLowPriceBtcIOC(t *testing.T) {
 func TestProcessOrderAllowsOtherIocOrders(t *testing.T) {
 	handler := NewHandler()
 
+	// we're simulating a BTC order, however it demands a price above 87000 USDT
 	orderMap := map[string]interface{}{
 		"a": float64(0),
 		"b": true,
 		"s": "0.01",
-		"p": "50000",
+		"p": "87001",
 		"t": map[string]interface{}{
 			"limit": map[string]interface{}{
 				"tif": "Ioc",
