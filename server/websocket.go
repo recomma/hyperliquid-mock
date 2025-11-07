@@ -24,9 +24,10 @@ type WebSocketManager struct {
 type ConnectionState struct {
 	conn             *websocket.Conn
 	mu               sync.RWMutex
-	orderUpdatesUser string // empty if not subscribed
-	l2BookCoins      map[string]bool
-	writeMu          sync.Mutex // Protects concurrent writes to conn
+	orderUpdatesUser string          // empty if not subscribed
+	l2BookCoins      map[string]bool // coins subscribed to l2Book
+	bboCoins         map[string]bool // coins subscribed to bbo
+	writeMu          sync.Mutex      // Protects concurrent writes to conn
 }
 
 // SubscriptionMessage represents a subscription request from the client
@@ -126,6 +127,7 @@ func (wsm *WebSocketManager) HandleConnection(w http.ResponseWriter, r *http.Req
 	state := &ConnectionState{
 		conn:        conn,
 		l2BookCoins: make(map[string]bool),
+		bboCoins:    make(map[string]bool),
 	}
 
 	wsm.mu.Lock()
@@ -217,8 +219,8 @@ func (wsm *WebSocketManager) handleSubscribe(state *ConnectionState, sub map[str
 		// Send subscription acknowledgment
 		wsm.sendSubscriptionResponse(state.conn, sub)
 
-		// Send initial BBO snapshot
-		wsm.sendInitialBBO(state.conn, coin)
+		// Send initial l2Book snapshot
+		wsm.sendInitialL2Book(state.conn, coin)
 
 	case "bbo":
 		coin, ok := sub["coin"].(string)
@@ -227,7 +229,7 @@ func (wsm *WebSocketManager) handleSubscribe(state *ConnectionState, sub map[str
 			return
 		}
 		state.mu.Lock()
-		state.l2BookCoins[coin] = true
+		state.bboCoins[coin] = true
 		state.mu.Unlock()
 
 		wsm.logger.Info("subscribed to bbo", "coin", coin)
@@ -263,6 +265,7 @@ func (wsm *WebSocketManager) handleUnsubscribe(state *ConnectionState, sub map[s
 		}
 		state.mu.Lock()
 		delete(state.l2BookCoins, coin)
+		delete(state.bboCoins, coin)
 		state.mu.Unlock()
 	}
 }
@@ -385,6 +388,8 @@ func (wsm *WebSocketManager) broadcastL2Book() {
 		wsm.mu.RLock()
 		for conn, state := range wsm.connections {
 			state.mu.RLock()
+
+			// Send as l2Book format if subscribed to l2Book
 			if state.l2BookCoins[update.Coin] {
 				state.mu.RUnlock()
 				msg := map[string]interface{}{
@@ -396,6 +401,28 @@ func (wsm *WebSocketManager) broadcastL2Book() {
 					},
 				}
 				wsm.sendJSON(conn, msg)
+			} else if state.bboCoins[update.Coin] {
+				// Send as bbo format if subscribed to bbo
+				state.mu.RUnlock()
+
+				// Extract best bid and ask from levels
+				var bid, ask *WsLevel
+				if len(update.Levels[0]) > 0 {
+					bid = &update.Levels[0][0]
+				}
+				if len(update.Levels[1]) > 0 {
+					ask = &update.Levels[1][0]
+				}
+
+				msg := map[string]interface{}{
+					"channel": "bbo",
+					"data": map[string]interface{}{
+						"coin": update.Coin,
+						"time": update.Time,
+						"bbo":  []*WsLevel{bid, ask},
+					},
+				}
+				wsm.sendJSON(conn, msg)
 			} else {
 				state.mu.RUnlock()
 			}
@@ -404,8 +431,8 @@ func (wsm *WebSocketManager) broadcastL2Book() {
 	}
 }
 
-// sendInitialBBO sends an initial BBO snapshot to a newly subscribed client
-func (wsm *WebSocketManager) sendInitialBBO(conn *websocket.Conn, coin string) {
+// sendInitialL2Book sends an initial l2Book snapshot to a newly subscribed client
+func (wsm *WebSocketManager) sendInitialL2Book(conn *websocket.Conn, coin string) {
 	// Get mock BBO prices based on coin
 	bid, ask := wsm.getMockBBO(coin)
 
@@ -418,6 +445,23 @@ func (wsm *WebSocketManager) sendInitialBBO(conn *websocket.Conn, coin string) {
 				{{Px: bid.Px, Sz: bid.Sz, N: 1}},
 				{{Px: ask.Px, Sz: ask.Sz, N: 1}},
 			},
+		},
+	}
+
+	wsm.sendJSON(conn, msg)
+}
+
+// sendInitialBBO sends an initial BBO snapshot to a newly subscribed client
+func (wsm *WebSocketManager) sendInitialBBO(conn *websocket.Conn, coin string) {
+	// Get mock BBO prices based on coin
+	bid, ask := wsm.getMockBBO(coin)
+
+	msg := map[string]interface{}{
+		"channel": "bbo",
+		"data": map[string]interface{}{
+			"coin": coin,
+			"time": time.Now().UnixMilli(),
+			"bbo":  []WsLevel{bid, ask},
 		},
 	}
 
