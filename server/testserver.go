@@ -71,6 +71,12 @@ func NewRequestCapture(logger *slog.Logger) *RequestCapture {
 // Wrap wraps an http.Handler to capture requests before passing them through
 func (rc *RequestCapture) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip body capture for WebSocket upgrade requests
+		if r.Header.Get("Upgrade") == "websocket" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Read body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
