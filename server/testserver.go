@@ -71,6 +71,12 @@ func NewRequestCapture(logger *slog.Logger) *RequestCapture {
 // Wrap wraps an http.Handler to capture requests before passing them through
 func (rc *RequestCapture) Wrap(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Skip body capture for WebSocket upgrade requests
+		if r.Header.Get("Upgrade") == "websocket" {
+			next.ServeHTTP(w, r)
+			return
+		}
+
 		// Read body
 		body, err := io.ReadAll(r.Body)
 		if err != nil {
@@ -208,6 +214,7 @@ func NewTestServer(t *testing.T, opts ...TestServerOption) *TestServer {
 	mux.HandleFunc("/exchange", handler.HandleExchange)
 	mux.HandleFunc("/info", handler.HandleInfo)
 	mux.HandleFunc("/health", handler.HandleHealth)
+	mux.HandleFunc("/ws", handler.wsm.HandleConnection)
 
 	// Wrap with capture middleware
 	capturedMux := capture.Wrap(mux)
@@ -233,6 +240,16 @@ func NewTestServer(t *testing.T, opts ...TestServerOption) *TestServer {
 // URL returns the base URL of the test server (e.g., "http://127.0.0.1:12345")
 func (ts *TestServer) URL() string {
 	return ts.httpServer.URL
+}
+
+// WebSocketURL returns the WebSocket URL of the test server
+func (ts *TestServer) WebSocketURL() string {
+	httpURL := ts.httpServer.URL
+	// Replace http:// with ws://
+	if len(httpURL) > 7 && httpURL[:7] == "http://" {
+		return "ws://" + httpURL[7:] + "/ws"
+	}
+	return httpURL + "/ws"
 }
 
 // Close shuts down the test server and blocks until all requests complete
@@ -361,5 +378,33 @@ func (ts *TestServer) FillOrder(cloid string, fillPrice float64, opts ...FillOpt
 	}
 	order.StatusTimestamp = time.Now().UnixMilli()
 
+	// Broadcast fill update via WebSocket
+	if state.wsm != nil {
+		state.wsm.BroadcastOrderUpdate(order)
+	}
+
 	return nil
+}
+
+// SetBBO allows tests to manually set BBO (Best Bid Offer) prices for a coin
+func (ts *TestServer) SetBBO(coin string, bidPx, bidSz, askPx, askSz float64) {
+	if ts == nil || ts.handler == nil || ts.handler.wsm == nil {
+		return
+	}
+
+	bidPxStr := strconv.FormatFloat(bidPx, 'f', -1, 64)
+	bidSzStr := strconv.FormatFloat(bidSz, 'f', -1, 64)
+	askPxStr := strconv.FormatFloat(askPx, 'f', -1, 64)
+	askSzStr := strconv.FormatFloat(askSz, 'f', -1, 64)
+
+	ts.handler.wsm.SetBBO(coin, bidPxStr, bidSzStr, askPxStr, askSzStr)
+}
+
+// TriggerBBOUpdate forces an immediate BBO update for a coin
+func (ts *TestServer) TriggerBBOUpdate(coin string) {
+	if ts == nil || ts.handler == nil || ts.handler.wsm == nil {
+		return
+	}
+
+	ts.handler.wsm.TriggerBBOUpdate(coin)
 }

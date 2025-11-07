@@ -14,6 +14,7 @@ import (
 type Handler struct {
 	state  *State
 	logger *slog.Logger
+	wsm    *WebSocketManager
 }
 
 // NewHandler creates a new request handler
@@ -30,9 +31,14 @@ func NewHandler(opts ...Option) *Handler {
 		logger = slog.Default()
 	}
 
+	wsm := NewWebSocketManager(logger)
+	state := NewState()
+	state.SetWebSocketManager(wsm)
+
 	return &Handler{
-		state:  NewState(),
+		state:  state,
 		logger: logger,
+		wsm:    wsm,
 	}
 }
 
