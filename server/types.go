@@ -8,8 +8,10 @@ import (
 
 // ExchangeRequest represents a request to the /exchange endpoint
 type ExchangeRequest struct {
-	Action    interface{} `json:"action"`
-	Nonce     int64       `json:"nonce"`
+	Action       interface{} `json:"action"`
+	Nonce        int64       `json:"nonce"`
+	VaultAddress *string     `json:"vaultAddress,omitempty"`
+	ExpiresAfter *int64      `json:"expiresAfter,omitempty"`
 	Signature struct {
 		R string `json:"r"`
 		S string `json:"s"`
@@ -34,7 +36,6 @@ type InfoRequest struct {
 	Type  string       `json:"type"`
 	User  string       `json:"user,omitempty"`
 	Oid   *FlexibleOid `json:"oid,omitempty"`
-	Cloid *string      `json:"cloid,omitempty"`
 }
 
 // FlexibleOid captures order identifiers that can be provided either as raw

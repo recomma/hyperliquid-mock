@@ -58,20 +58,10 @@ func (sortedMapSlice) MapBySlice() {}
 
 // sortedMapToMsgpack converts a map to msgpack with sorted keys, matching go-hyperliquid's behavior
 func sortedMapToMsgpack(data interface{}) ([]byte, error) {
-	// Convert to map[string]interface{} if needed
-	var m map[string]interface{}
-	switch v := data.(type) {
-	case map[string]interface{}:
-		m = v
-	default:
-		// Try to convert via JSON round-trip
-		jsonBytes, err := json.Marshal(data)
-		if err != nil {
-			return nil, err
-		}
-		if err := json.Unmarshal(jsonBytes, &m); err != nil {
-			return nil, err
-		}
+	// Convert to map[string]interface{} while ensuring we don't mutate the original
+	m, err := cloneToStringMap(data)
+	if err != nil {
+		return nil, err
 	}
 
 	sorted := convertMapToSortedSlice(m)
@@ -90,10 +80,11 @@ func normalizeMsgpackValue(value interface{}) interface{} {
 	case map[string]interface{}:
 		return convertMapToSortedSlice(v)
 	case []interface{}:
+		cloned := make([]interface{}, len(v))
 		for i := range v {
-			v[i] = normalizeMsgpackValue(v[i])
+			cloned[i] = normalizeMsgpackValue(v[i])
 		}
-		return v
+		return cloned
 	default:
 		return v
 	}
@@ -116,6 +107,18 @@ func convertMapToSortedSlice(m map[string]interface{}) sortedMapSlice {
 		result = append(result, normalizeMsgpackValue(m[key]))
 	}
 	return result
+}
+
+func cloneToStringMap(data interface{}) (map[string]interface{}, error) {
+	var m map[string]interface{}
+	jsonBytes, err := json.Marshal(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(jsonBytes, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 // recoverWalletFromSignature attempts to recover the wallet address from the request signature
@@ -668,23 +671,21 @@ func (h *Handler) HandleInfo(w http.ResponseWriter, r *http.Request) {
 
 // handleOrderStatus queries order status by cloid or oid
 func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
-	var order *OrderDetail
-	var exists bool
+	var (
+		order  *OrderDetail
+		exists bool
+	)
 
-	if req.Oid != nil && !req.Oid.Valid() && req.Cloid == nil {
-		if raw := req.Oid.Raw(); raw != "" {
-			req.Cloid = &raw
-		}
+	if req.Oid == nil && req.User == "" {
+		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
-	// Try to query by OID first
-	if req.Oid != nil && req.Oid.Valid() {
+	switch {
+	case req.Oid != nil && req.Oid.Raw() == "" && req.Oid.Valid():
 		order, exists = h.state.GetOrderByOid(req.Oid.Int64())
-	} else if req.Cloid != nil && *req.Cloid != "" {
-		// Query by CLOID
-		order, exists = h.state.GetOrder(*req.Cloid)
-	} else if req.User != "" {
-		// If only user is provided without OID or CLOID, return unknown
+	case req.Oid != nil && req.Oid.Raw() != "":
+		order, exists = h.state.GetOrder(req.Oid.Raw())
+	case req.User != "":
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
@@ -692,22 +693,11 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
-	// Verify wallet isolation: only enforce if the order has a wallet set
-	// This handles cases where signature recovery failed or wasn't performed
-	if order.Order.User != "" && req.User != "" {
-		// Both order and request have wallets - enforce isolation
-		if order.Order.User != req.User {
-			// Order exists but doesn't belong to the requesting user
-			return OrderQueryResult{Status: "unknown_cloid"}
-		}
+	if order.Order.User != req.User {
+		h.logger.Debug("order present but user does not match", slog.String("order.User", order.Order.User), slog.String("req.User", req.User))
+		return OrderQueryResult{Status: "unknown_cloid"}
 	}
-	// If order.User is empty (signature recovery failed/not implemented),
-	// the order is accessible to all queries for backward compatibility
-
-	return OrderQueryResult{
-		Status: "order",
-		Order:  order,
-	}
+	return OrderQueryResult{Status: "order", Order: order}
 }
 
 // handleMetaAndAssetCtxs returns mock perpetual futures metadata

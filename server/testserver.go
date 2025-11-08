@@ -342,7 +342,7 @@ func (ts *TestServer) FillOrder(cloid string, fillPrice float64, opts ...FillOpt
 	state.mu.Lock()
 	defer state.mu.Unlock()
 
-	order, exists := state.orders[cloid]
+	order, exists := state.orders[canonicalizeCloidKey(cloid)]
 	if !exists {
 		return fmt.Errorf("unknown cloid %s", cloid)
 	}

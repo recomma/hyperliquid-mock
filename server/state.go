@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -51,7 +52,8 @@ func (s *State) CreateOrder(cloid string, coin string, side string, limitPx stri
 		StatusTimestamp: now,
 	}
 
-	s.orders[cloid] = order
+	key := canonicalizeCloidKey(cloid)
+	s.orders[key] = order
 
 	// Broadcast order update via WebSocket
 	if s.wsm != nil {
@@ -66,7 +68,8 @@ func (s *State) ModifyOrder(cloid string, limitPx string, sz string) (int64, boo
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	order, exists := s.orders[cloid]
+	key := canonicalizeCloidKey(cloid)
+	order, exists := s.orders[key]
 	if !exists {
 		return 0, false
 	}
@@ -112,7 +115,8 @@ func (s *State) CancelOrder(cloid string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	order, exists := s.orders[cloid]
+	key := canonicalizeCloidKey(cloid)
+	order, exists := s.orders[key]
 	if !exists {
 		return false
 	}
@@ -156,7 +160,8 @@ func (s *State) GetOrder(cloid string) (*OrderDetail, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	order, exists := s.orders[cloid]
+	key := canonicalizeCloidKey(cloid)
+	order, exists := s.orders[key]
 	if !exists {
 		return nil, false
 	}
@@ -179,4 +184,14 @@ func (s *State) GetOrderByOid(oid int64) (*OrderDetail, bool) {
 	}
 
 	return nil, false
+}
+
+func canonicalizeCloidKey(cloid string) string {
+	if len(cloid) >= 2 {
+		prefix := cloid[:2]
+		if prefix == "0x" || prefix == "0X" {
+			return strings.ToLower(cloid[2:])
+		}
+	}
+	return cloid
 }

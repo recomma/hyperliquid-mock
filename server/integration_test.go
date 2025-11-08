@@ -3,7 +3,10 @@ package server_test
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/crypto"
@@ -52,7 +55,9 @@ func TestIntegrationWithGoHyperliquid(t *testing.T) {
 
 	// Create an order using the real go-hyperliquid library
 	// CLOID must be exactly 32 hex characters (16 bytes)
-	cloid := "00000000000000000000000000000001"
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
 	orderReq := hyperliquid.CreateOrderRequest{
 		Coin:  "ETH",
 		IsBuy: true,
@@ -130,7 +135,9 @@ func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 
 	// Create initial order
 	// CLOID must be exactly 32 hex characters (16 bytes)
-	cloid := "00000000000000000000000000000002"
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
 	_, err = exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "BTC",
 		IsBuy: true,
@@ -150,15 +157,12 @@ func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 	if !exists {
 		t.Fatal("Order not found")
 	}
-	oid := order.Order.Oid
 
 	// Clear request history to focus on the modify
 	ts.ClearRequests()
 
-	// Modify the order (use OID as hex string)
-	oidHex := fmt.Sprintf("0x%x", oid)
 	_, err = exchange.ModifyOrder(ctx, hyperliquid.ModifyOrderRequest{
-		Cloid: &hyperliquid.Cloid{Value: oidHex},
+		Cloid: &hyperliquid.Cloid{Value: *order.Order.Cloid},
 		Order: hyperliquid.CreateOrderRequest{
 			Coin:  "BTC",
 			IsBuy: true,
@@ -212,7 +216,9 @@ func TestOrderCancellationWithGoHyperliquid(t *testing.T) {
 
 	// Create an order
 	// CLOID must be exactly 32 hex characters (16 bytes)
-	cloid := "00000000000000000000000000000003"
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
 	_, err = exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "SOL",
 		IsBuy: false,
@@ -262,7 +268,8 @@ func TestOrderCancellationWithGoHyperliquid(t *testing.T) {
 
 // TestQueryOrderStatusWithGoHyperliquid demonstrates testing order status queries
 func TestQueryOrderStatusWithGoHyperliquid(t *testing.T) {
-	ts := server.NewTestServer(t)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ts := server.NewTestServer(t, server.WithLogger(logger))
 	ctx := context.Background()
 
 	// Create a test private key
@@ -279,7 +286,9 @@ func TestQueryOrderStatusWithGoHyperliquid(t *testing.T) {
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
 	// CLOID must be exactly 32 hex characters (16 bytes)
-	cloid := "00000000000000000000000000000004"
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
 	_, err = exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "ARB",
 		IsBuy: true,

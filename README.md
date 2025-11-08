@@ -247,7 +247,9 @@ func TestMyHyperliquidCode(t *testing.T) {
     )
 
     // Run your test code
-    cloid := "my-cloid"
+    token := make([]byte, 16)
+	  rand.Read(token)
+	  cloid := fmt.Sprintf("0x%x", token)
     status, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
         Coin:  "ETH",
         IsBuy: true,
