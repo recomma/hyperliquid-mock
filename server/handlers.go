@@ -598,12 +598,17 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
-	// Verify wallet isolation: if a user is specified in the request,
-	// only return the order if it belongs to that user
-	if req.User != "" && order.Order.User != "" && order.Order.User != req.User {
-		// Order exists but doesn't belong to the requesting user
-		return OrderQueryResult{Status: "unknown_cloid"}
+	// Verify wallet isolation: only enforce if the order has a wallet set
+	// This handles cases where signature recovery failed or wasn't performed
+	if order.Order.User != "" && req.User != "" {
+		// Both order and request have wallets - enforce isolation
+		if order.Order.User != req.User {
+			// Order exists but doesn't belong to the requesting user
+			return OrderQueryResult{Status: "unknown_cloid"}
+		}
 	}
+	// If order.User is empty (signature recovery failed/not implemented),
+	// the order is accessible to all queries for backward compatibility
 
 	return OrderQueryResult{
 		Status: "order",
