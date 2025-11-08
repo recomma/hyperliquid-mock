@@ -196,11 +196,13 @@ func (wsm *WebSocketManager) handleSubscribe(state *ConnectionState, sub map[str
 			wsm.sendError(state.conn, "Missing user address for orderUpdates")
 			return
 		}
+		// Normalize address for case-insensitive comparison
+		normalizedUser := normalizeAddress(user)
 		state.mu.Lock()
-		state.orderUpdatesUser = user
+		state.orderUpdatesUser = normalizedUser
 		state.mu.Unlock()
 
-		wsm.logger.Info("subscribed to orderUpdates", "user", user)
+		wsm.logger.Info("subscribed to orderUpdates", "user", user, "normalized", normalizedUser)
 
 		// Send subscription acknowledgment
 		wsm.sendSubscriptionResponse(state.conn, sub)
@@ -370,7 +372,8 @@ func (wsm *WebSocketManager) broadcastOrderUpdates() {
 				// Send if:
 				// 1. Order has no wallet (signature recovery failed) - backward compatibility
 				// 2. Order wallet matches subscriber wallet - proper isolation
-				if orderUser == "" || orderUser == subscribedUser {
+				//    (Compare normalized addresses for case-insensitive matching)
+				if orderUser == "" || normalizeAddress(orderUser) == subscribedUser {
 					shouldSend = true
 				}
 			}

@@ -10,6 +10,12 @@ import (
 	"time"
 )
 
+// normalizeAddress converts an Ethereum address to lowercase for case-insensitive comparison.
+// Ethereum addresses are case-insensitive; the mixed case (EIP-55 checksum) is optional validation.
+func normalizeAddress(addr string) string {
+	return strings.ToLower(addr)
+}
+
 // Handler manages HTTP requests for the mock server
 type Handler struct {
 	state  *State
@@ -546,7 +552,9 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
-	if order.Order.User != req.User {
+	// Compare normalized addresses for case-insensitive matching
+	// Ethereum addresses are case-insensitive; EIP-55 checksum is optional
+	if normalizeAddress(order.Order.User) != normalizeAddress(req.User) {
 		h.logger.Debug("order present but user does not match", slog.String("order.User", order.Order.User), slog.String("req.User", req.User))
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
