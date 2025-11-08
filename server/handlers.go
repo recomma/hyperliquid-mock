@@ -7,12 +7,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/vmihailenco/msgpack/v5"
+	"github.com/hashicorp/go-msgpack/codec"
 )
 
 // Handler manages HTTP requests for the mock server
@@ -47,6 +48,14 @@ func NewHandler(opts ...Option) *Handler {
 	}
 }
 
+var msgpackHandle = &codec.MsgpackHandle{
+	RawToString: true,
+}
+
+type sortedMapSlice []interface{}
+
+func (sortedMapSlice) MapBySlice() {}
+
 // sortedMapToMsgpack converts a map to msgpack with sorted keys, matching go-hyperliquid's behavior
 func sortedMapToMsgpack(data interface{}) ([]byte, error) {
 	// Convert to map[string]interface{} if needed
@@ -65,22 +74,48 @@ func sortedMapToMsgpack(data interface{}) ([]byte, error) {
 		}
 	}
 
-	// Create a sorted map encoder
-	// msgpack encoder with sorted keys
-	encoder := msgpack.GetEncoder()
-	defer msgpack.PutEncoder(encoder)
-
-	encoder.SetSortMapKeys(true)
-	encoder.SetCustomStructTag("json") // Use json tags for field names
+	sorted := convertMapToSortedSlice(m)
 
 	var buf []byte
-	encoder.ResetBytes(&buf)
-
-	if err := encoder.Encode(m); err != nil {
+	encoder := codec.NewEncoderBytes(&buf, msgpackHandle)
+	if err := encoder.Encode(sorted); err != nil {
 		return nil, err
 	}
 
 	return buf, nil
+}
+
+func normalizeMsgpackValue(value interface{}) interface{} {
+	switch v := value.(type) {
+	case map[string]interface{}:
+		return convertMapToSortedSlice(v)
+	case []interface{}:
+		for i := range v {
+			v[i] = normalizeMsgpackValue(v[i])
+		}
+		return v
+	default:
+		return v
+	}
+}
+
+func convertMapToSortedSlice(m map[string]interface{}) sortedMapSlice {
+	if len(m) == 0 {
+		return sortedMapSlice{}
+	}
+
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	result := make(sortedMapSlice, 0, len(keys)*2)
+	for _, key := range keys {
+		result = append(result, key)
+		result = append(result, normalizeMsgpackValue(m[key]))
+	}
+	return result
 }
 
 // recoverWalletFromSignature attempts to recover the wallet address from the request signature
