@@ -324,17 +324,20 @@ This implementation follows the official Hyperliquid WebSocket API specification
 - `/upstream-api-docs/subscriptions.md`
 
 Key differences from production API:
-- User tracking simplified (uses placeholder in mock)
 - BBO updates are manual/on-demand (vs. real-time market data)
 - Limited to orderUpdates and l2Book/bbo subscriptions
-- No authentication required
+- Uses testnet EIP-712 domain for signature verification (chainId: 1337)
+
+## Implemented Features
+
+- **Wallet-based order filtering** - Orders are automatically isolated by wallet address
+- **Signature recovery** - ECDSA signature verification extracts wallet addresses
+- **Real-time order updates** - WebSocket broadcasts filtered by wallet ownership
 
 ## Future Enhancements
 
 Potential additions (not currently in scope):
 - Additional subscription types (trades, candles, userFills, etc.)
 - Automatic periodic BBO updates
-- User-based order filtering
-- WebSocket authentication
 - Connection heartbeat/ping-pong
 - Reconnection handling
