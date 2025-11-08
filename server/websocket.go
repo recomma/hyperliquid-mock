@@ -90,12 +90,6 @@ type BBOUpdate struct {
 	BBO  [2]WsLevel `json:"bbo"` // [bid, ask]
 }
 
-// normalizeAddress converts an Ethereum address to lowercase for case-insensitive comparison.
-// Ethereum addresses are case-insensitive; the mixed case (EIP-55 checksum) is optional validation.
-func normalizeAddress(addr string) string {
-	return strings.ToLower(addr)
-}
-
 // NewWebSocketManager creates a new WebSocket manager
 func NewWebSocketManager(logger *slog.Logger) *WebSocketManager {
 	if logger == nil {
