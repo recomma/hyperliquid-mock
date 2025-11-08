@@ -28,7 +28,7 @@ func (s *State) SetWebSocketManager(wsm *WebSocketManager) {
 }
 
 // CreateOrder adds a new order to the state
-func (s *State) CreateOrder(cloid string, coin string, side string, limitPx string, sz string) int64 {
+func (s *State) CreateOrder(cloid string, coin string, side string, limitPx string, sz string, user string) int64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -45,6 +45,7 @@ func (s *State) CreateOrder(cloid string, coin string, side string, limitPx stri
 			Timestamp: now,
 			OrigSz:    sz,
 			Cloid:     &cloid,
+			User:      user,
 		},
 		Status:          "open",
 		StatusTimestamp: now,

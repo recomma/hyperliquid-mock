@@ -65,6 +65,7 @@ type WsBasicOrder struct {
 	Timestamp int64   `json:"timestamp"`
 	OrigSz    string  `json:"origSz"`
 	Cloid     *string `json:"cloid,omitempty"`
+	User      string  `json:"user,omitempty"` // Wallet address that owns this order
 }
 
 // L2BookUpdate represents a market data update to broadcast
@@ -328,6 +329,7 @@ func (wsm *WebSocketManager) BroadcastOrderUpdate(order *OrderDetail) {
 			Timestamp: order.Order.Timestamp,
 			OrigSz:    order.Order.OrigSz,
 			Cloid:     order.Order.Cloid,
+			User:      order.Order.User,
 		},
 		Status:          order.Status,
 		StatusTimestamp: order.StatusTimestamp,
@@ -345,22 +347,27 @@ func (wsm *WebSocketManager) BroadcastOrderUpdate(order *OrderDetail) {
 }
 
 // broadcastOrderUpdates broadcasts order updates to subscribed clients
-// In the mock server, we broadcast to all orderUpdates subscribers
+// Orders are filtered by wallet - each client only receives updates for their own orders
 func (wsm *WebSocketManager) broadcastOrderUpdates() {
 	for update := range wsm.orderUpdatesCh {
 		wsm.mu.RLock()
 		for conn, state := range wsm.connections {
 			state.mu.RLock()
-			// In the mock, broadcast to anyone subscribed to orderUpdates
-			if state.orderUpdatesUser != "" {
-				state.mu.RUnlock()
-				msg := map[string]interface{}{
-					"channel": "orderUpdates",
-					"data":    update.Orders,
+			subscribedUser := state.orderUpdatesUser
+			state.mu.RUnlock()
+
+			// Only send updates if:
+			// 1. Client is subscribed to orderUpdates (subscribedUser != "")
+			// 2. The order belongs to the subscribed user
+			if subscribedUser != "" && len(update.Orders) > 0 {
+				orderUser := update.Orders[0].Order.User
+				if orderUser == subscribedUser {
+					msg := map[string]interface{}{
+						"channel": "orderUpdates",
+						"data":    update.Orders,
+					}
+					wsm.sendJSON(conn, msg)
 				}
-				wsm.sendJSON(conn, msg)
-			} else {
-				state.mu.RUnlock()
 			}
 		}
 		wsm.mu.RUnlock()

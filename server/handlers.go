@@ -1,13 +1,20 @@
 package server
 
 import (
+	"bytes"
+	"crypto/ecdsa"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
 // Handler manages HTTP requests for the mock server
@@ -42,6 +49,55 @@ func NewHandler(opts ...Option) *Handler {
 	}
 }
 
+// recoverWalletFromSignature attempts to recover the wallet address from the request signature
+// For the mock server, we use a simplified approach that works for testing
+func (h *Handler) recoverWalletFromSignature(req *ExchangeRequest) (string, error) {
+	// Convert signature components from hex strings to bytes
+	rBytes, err := hex.DecodeString(strings.TrimPrefix(req.Signature.R, "0x"))
+	if err != nil {
+		return "", fmt.Errorf("invalid signature R: %w", err)
+	}
+	sBytes, err := hex.DecodeString(strings.TrimPrefix(req.Signature.S, "0x"))
+	if err != nil {
+		return "", fmt.Errorf("invalid signature S: %w", err)
+	}
+
+	// Construct the message hash from the action
+	// In the real Hyperliquid protocol, this involves specific encoding
+	// For the mock server, we use a simplified hash of the JSON action
+	actionBytes, err := json.Marshal(req.Action)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal action: %w", err)
+	}
+
+	// Create message hash
+	messageHash := crypto.Keccak256Hash(actionBytes)
+
+	// Construct signature in the format expected by crypto.SigToPub
+	// Ethereum signatures are 65 bytes: R (32) + S (32) + V (1)
+	signature := make([]byte, 65)
+	copy(signature[0:32], rBytes)
+	copy(signature[32:64], sBytes)
+
+	// V is the recovery ID, typically 27 or 28 in Ethereum
+	// For secp256k1, we need V to be 0 or 1
+	v := byte(req.Signature.V)
+	if v >= 27 {
+		v -= 27
+	}
+	signature[64] = v
+
+	// Recover the public key from the signature
+	pubKey, err := crypto.SigToPub(messageHash.Bytes(), signature)
+	if err != nil {
+		return "", fmt.Errorf("failed to recover public key: %w", err)
+	}
+
+	// Derive the Ethereum address from the public key
+	address := crypto.PubkeyToAddress(*pubKey)
+	return address.Hex(), nil
+}
+
 // HandleExchange handles POST /exchange requests
 func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -58,6 +114,17 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Debug("exchange request received", "request", req)
 
+	// Extract wallet address from signature
+	walletAddr, err := h.recoverWalletFromSignature(&req)
+	if err != nil {
+		h.logger.Warn("failed to recover wallet from signature", "error", err)
+		// For backward compatibility, allow requests without valid signatures
+		// but log the warning
+		walletAddr = ""
+	} else {
+		h.logger.Debug("recovered wallet address", "wallet", walletAddr)
+	}
+
 	// Parse the action to determine the operation type
 	actionMap, ok := req.Action.(map[string]interface{})
 	if !ok {
@@ -70,11 +137,11 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	if order, ok := actionMap["type"].(string); ok {
 		switch order {
 		case "order":
-			response = h.handleOrder(actionMap)
+			response = h.handleOrder(actionMap, walletAddr)
 		case "cancel", "cancelByCloid":
 			response = h.handleCancel(actionMap)
 		case "modify":
-			response = h.handleModify(actionMap)
+			response = h.handleModify(actionMap, walletAddr)
 		case "batchModify":
 			response = h.handleBatchModify(actionMap)
 		default:
@@ -83,7 +150,7 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Try to detect action type from the structure
 		if _, hasOrders := actionMap["orders"]; hasOrders {
-			response = h.handleOrder(actionMap)
+			response = h.handleOrder(actionMap, walletAddr)
 		} else if _, hasCancels := actionMap["cancels"]; hasCancels {
 			response = h.handleCancel(actionMap)
 		} else if _, hasModifies := actionMap["modifies"]; hasModifies {
@@ -100,7 +167,7 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOrder processes order creation/modification
-func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
+func (h *Handler) handleOrder(action map[string]interface{}, walletAddr string) ExchangeResponse {
 	// Extract order details
 	var statuses []OrderStatusResponse
 
@@ -108,12 +175,12 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 	if orders, ok := action["orders"].([]interface{}); ok {
 		for _, o := range orders {
 			orderMap, _ := o.(map[string]interface{})
-			status := h.processOrder(orderMap)
+			status := h.processOrder(orderMap, walletAddr)
 			statuses = append(statuses, status)
 		}
 	} else {
 		// Single order
-		status := h.processOrder(action)
+		status := h.processOrder(action, walletAddr)
 		statuses = append(statuses, status)
 	}
 
@@ -129,7 +196,7 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 }
 
 // processOrder creates or modifies a single order
-func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusResponse {
+func (h *Handler) processOrder(orderMap map[string]interface{}, walletAddr string) OrderStatusResponse {
 	// Handle both full field names and abbreviated format
 	// Abbreviated: a=asset, b=is_buy, c=cloid, o=oid, p=price, s=size
 	var coin string
@@ -230,7 +297,7 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		cloid = fmt.Sprintf("mock-%d", time.Now().UnixNano())
 	}
 
-	newOid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr)
+	newOid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr, walletAddr)
 
 	return OrderStatusResponse{
 		Resting: &RestingStatus{Oid: newOid, Cloid: &cloid},
@@ -272,7 +339,7 @@ func (h *Handler) mapAssetIndexToCoin(index int) string {
 }
 
 // handleModify processes a single order modification
-func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
+func (h *Handler) handleModify(action map[string]interface{}, walletAddr string) ExchangeResponse {
 	// Extract oid (can be numeric or hex string)
 	var oid int64
 	var hasOid bool
@@ -331,7 +398,7 @@ func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
 	orderMap["o"] = float64(oid)
 
 	// Process the modification
-	status := h.processOrder(orderMap)
+	status := h.processOrder(orderMap, walletAddr)
 
 	return ExchangeResponse{
 		Status: "ok",
@@ -527,12 +594,18 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 		// Query by CLOID
 		order, exists = h.state.GetOrder(*req.Cloid)
 	} else if req.User != "" {
-		// In a real implementation, we'd filter by user
-		// For the mock, we just return unknown
+		// If only user is provided without OID or CLOID, return unknown
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
 	if !exists || order == nil {
+		return OrderQueryResult{Status: "unknown_cloid"}
+	}
+
+	// Verify wallet isolation: if a user is specified in the request,
+	// only return the order if it belongs to that user
+	if req.User != "" && order.Order.User != "" && order.Order.User != req.User {
+		// Order exists but doesn't belong to the requesting user
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 

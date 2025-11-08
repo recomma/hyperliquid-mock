@@ -138,6 +138,7 @@ type OrderInfo struct {
 	Timestamp int64   `json:"timestamp"`
 	OrigSz    string  `json:"origSz"`
 	Cloid     *string `json:"cloid,omitempty"`
+	User      string  `json:"user,omitempty"` // Wallet address that owns this order
 }
 
 // MetaUniverse represents a trading pair in the metadata
