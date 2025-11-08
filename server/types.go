@@ -12,7 +12,7 @@ type ExchangeRequest struct {
 	Nonce        int64       `json:"nonce"`
 	VaultAddress *string     `json:"vaultAddress,omitempty"`
 	ExpiresAfter *int64      `json:"expiresAfter,omitempty"`
-	Signature struct {
+	Signature    struct {
 		R string `json:"r"`
 		S string `json:"s"`
 		V int    `json:"v"`
@@ -33,9 +33,9 @@ type ExchangeActionData struct {
 
 // InfoRequest represents a request to the /info endpoint
 type InfoRequest struct {
-	Type  string       `json:"type"`
-	User  string       `json:"user,omitempty"`
-	Oid   *FlexibleOid `json:"oid,omitempty"`
+	Type string       `json:"type"`
+	User string       `json:"user,omitempty"`
+	Oid  *FlexibleOid `json:"oid,omitempty"`
 }
 
 // FlexibleOid captures order identifiers that can be provided either as raw

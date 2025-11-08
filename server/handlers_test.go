@@ -3,14 +3,13 @@ package server
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	hyperliquid "github.com/sonirico/go-hyperliquid"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,27 +69,19 @@ type testSignature struct {
 func signActionForTest(t *testing.T, key *ecdsa.PrivateKey, action map[string]interface{}, nonce int64) testSignature {
 	t.Helper()
 
-	actionBytes, err := sortedMapToMsgpack(action)
+	body, err := json.Marshal(action)
 	require.NoError(t, err)
 
-	messageBytes := make([]byte, 0, len(actionBytes)+8+20+8)
-	messageBytes = append(messageBytes, actionBytes...)
+	var typed hyperliquid.OrderAction
+	require.NoError(t, json.Unmarshal(body, &typed))
 
-	nonceBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(nonceBytes, uint64(nonce))
-	messageBytes = append(messageBytes, nonceBytes...)
-
-	messageBytes = append(messageBytes, make([]byte, 20)...)
-	messageBytes = append(messageBytes, make([]byte, 8)...)
-
-	hash := crypto.Keccak256Hash(messageBytes)
-	sig, err := crypto.Sign(hash.Bytes(), key)
+	sig, err := hyperliquid.SignL1Action(key, typed, "", nonce, nil, false)
 	require.NoError(t, err)
 
 	return testSignature{
-		R: "0x" + hex.EncodeToString(sig[:32]),
-		S: "0x" + hex.EncodeToString(sig[32:64]),
-		V: int(sig[64]) + 27,
+		R: sig.R,
+		S: sig.S,
+		V: sig.V,
 	}
 }
 

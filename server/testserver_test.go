@@ -3,7 +3,9 @@ package server_test
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"net/http"
+	"os"
 	"testing"
 	"time"
 
@@ -174,7 +176,8 @@ func TestMultipleOrders(t *testing.T) {
 
 func TestTestServerFillOrder(t *testing.T) {
 	t.Run("full fill", func(t *testing.T) {
-		ts := server.NewTestServer(t)
+		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		ts := server.NewTestServer(t, server.WithLogger(logger))
 
 		makeExchangeRequest(t, ts.URL(), "BTC", 1.0, 50000.0)
 		cloid := extractCloid(t, ts)
@@ -183,7 +186,12 @@ func TestTestServerFillOrder(t *testing.T) {
 			t.Fatalf("FillOrder returned error: %v", err)
 		}
 
-		result := queryOrderStatus(t, ts.URL(), cloid)
+		order, exists := ts.GetOrder(cloid)
+		if !exists {
+			t.Fatal("order not found after creation")
+		}
+
+		result := queryOrderStatus(t, ts.URL(), order.Order.User, cloid)
 
 		if result.Status != "order" {
 			t.Fatalf("expected order status response, got %s", result.Status)
@@ -209,7 +217,8 @@ func TestTestServerFillOrder(t *testing.T) {
 	})
 
 	t.Run("partial fill", func(t *testing.T) {
-		ts := server.NewTestServer(t)
+		logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		ts := server.NewTestServer(t, server.WithLogger(logger))
 
 		makeExchangeRequest(t, ts.URL(), "ETH", 1.0, 3000.0)
 		cloid := extractCloid(t, ts)
@@ -218,7 +227,12 @@ func TestTestServerFillOrder(t *testing.T) {
 			t.Fatalf("FillOrder returned error: %v", err)
 		}
 
-		result := queryOrderStatus(t, ts.URL(), cloid)
+		order, exists := ts.GetOrder(cloid)
+		if !exists {
+			t.Fatal("order not found after creation")
+		}
+
+		result := queryOrderStatus(t, ts.URL(), order.Order.User, cloid)
 
 		if result.Status != "order" {
 			t.Fatalf("expected order status response, got %s", result.Status)
@@ -349,12 +363,15 @@ func makeInfoRequest(t *testing.T, baseURL, reqType string) {
 	}
 }
 
-func queryOrderStatus(t *testing.T, baseURL, cloid string) server.OrderQueryResult {
+func queryOrderStatus(t *testing.T, baseURL, user, cloid string) server.OrderQueryResult {
 	t.Helper()
 
 	payload := map[string]interface{}{
-		"type":  "orderStatus",
-		"cloid": cloid,
+		"type": "orderStatus",
+		"oid":  cloid,
+	}
+	if user != "" {
+		payload["user"] = user
 	}
 
 	body, err := json.Marshal(payload)

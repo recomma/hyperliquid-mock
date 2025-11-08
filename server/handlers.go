@@ -1,19 +1,13 @@
 package server
 
 import (
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/ethereum/go-ethereum/crypto"
-	"github.com/hashicorp/go-msgpack/codec"
 )
 
 // Handler manages HTTP requests for the mock server
@@ -48,148 +42,7 @@ func NewHandler(opts ...Option) *Handler {
 	}
 }
 
-var msgpackHandle = &codec.MsgpackHandle{
-	RawToString: true,
-}
-
-type sortedMapSlice []interface{}
-
-func (sortedMapSlice) MapBySlice() {}
-
-// sortedMapToMsgpack converts a map to msgpack with sorted keys, matching go-hyperliquid's behavior
-func sortedMapToMsgpack(data interface{}) ([]byte, error) {
-	// Convert to map[string]interface{} while ensuring we don't mutate the original
-	m, err := cloneToStringMap(data)
-	if err != nil {
-		return nil, err
-	}
-
-	sorted := convertMapToSortedSlice(m)
-
-	var buf []byte
-	encoder := codec.NewEncoderBytes(&buf, msgpackHandle)
-	if err := encoder.Encode(sorted); err != nil {
-		return nil, err
-	}
-
-	return buf, nil
-}
-
-func normalizeMsgpackValue(value interface{}) interface{} {
-	switch v := value.(type) {
-	case map[string]interface{}:
-		return convertMapToSortedSlice(v)
-	case []interface{}:
-		cloned := make([]interface{}, len(v))
-		for i := range v {
-			cloned[i] = normalizeMsgpackValue(v[i])
-		}
-		return cloned
-	default:
-		return v
-	}
-}
-
-func convertMapToSortedSlice(m map[string]interface{}) sortedMapSlice {
-	if len(m) == 0 {
-		return sortedMapSlice{}
-	}
-
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	result := make(sortedMapSlice, 0, len(keys)*2)
-	for _, key := range keys {
-		result = append(result, key)
-		result = append(result, normalizeMsgpackValue(m[key]))
-	}
-	return result
-}
-
-func cloneToStringMap(data interface{}) (map[string]interface{}, error) {
-	var m map[string]interface{}
-	jsonBytes, err := json.Marshal(data)
-	if err != nil {
-		return nil, err
-	}
-	if err := json.Unmarshal(jsonBytes, &m); err != nil {
-		return nil, err
-	}
-	return m, nil
-}
-
-// recoverWalletFromSignature attempts to recover the wallet address from the request signature
-// This implements the Hyperliquid L1 action signing format: msgpack(action) + nonce + vault + expires
-func (h *Handler) recoverWalletFromSignature(req *ExchangeRequest) (string, error) {
-	// Convert signature components from hex strings to bytes
-	rBytes, err := hex.DecodeString(strings.TrimPrefix(req.Signature.R, "0x"))
-	if err != nil {
-		return "", fmt.Errorf("invalid signature R: %w", err)
-	}
-	sBytes, err := hex.DecodeString(strings.TrimPrefix(req.Signature.S, "0x"))
-	if err != nil {
-		return "", fmt.Errorf("invalid signature S: %w", err)
-	}
-
-	// Msgpack encode the action with sorted keys (matching go-hyperliquid's SignL1Action)
-	actionBytes, err := sortedMapToMsgpack(req.Action)
-	if err != nil {
-		return "", fmt.Errorf("failed to msgpack encode action: %w", err)
-	}
-
-	// Build the message that was signed: msgpack(action) + nonce + vault + expires
-	// Based on go-hyperliquid's SignL1Action:
-	// 1. Msgpack-encoded action
-	// 2. Nonce (8 bytes, big endian uint64)
-	// 3. Vault address (20 bytes, zeros if empty)
-	// 4. Expires timestamp (8 bytes, big endian uint64, or 0 if not set)
-
-	messageBytes := make([]byte, 0, len(actionBytes)+8+20+8)
-	messageBytes = append(messageBytes, actionBytes...)
-
-	// Append nonce (8 bytes, big endian)
-	nonceBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(nonceBytes, uint64(req.Nonce))
-	messageBytes = append(messageBytes, nonceBytes...)
-
-	// Append vault address (20 bytes) - use zeros for non-vault accounts
-	vaultBytes := make([]byte, 20)
-	messageBytes = append(messageBytes, vaultBytes...)
-
-	// Append expires timestamp (8 bytes) - use 0 if not set
-	expiresBytes := make([]byte, 8)
-	messageBytes = append(messageBytes, expiresBytes...)
-
-	// Hash the complete message
-	messageHash := crypto.Keccak256Hash(messageBytes)
-
-	// Construct signature in the format expected by crypto.SigToPub
-	// Ethereum signatures are 65 bytes: R (32) + S (32) + V (1)
-	signature := make([]byte, 65)
-	copy(signature[0:32], rBytes)
-	copy(signature[32:64], sBytes)
-
-	// V is the recovery ID, typically 27 or 28 in Ethereum
-	// For secp256k1, we need V to be 0 or 1
-	v := byte(req.Signature.V)
-	if v >= 27 {
-		v -= 27
-	}
-	signature[64] = v
-
-	// Recover the public key from the signature
-	pubKey, err := crypto.SigToPub(messageHash.Bytes(), signature)
-	if err != nil {
-		return "", fmt.Errorf("failed to recover public key: %w", err)
-	}
-
-	// Derive the Ethereum address from the public key
-	address := crypto.PubkeyToAddress(*pubKey)
-	return address.Hex(), nil
-}
+// recoverWalletFromSignature is implemented in signature_recovery.go
 
 // HandleExchange handles POST /exchange requests
 func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
