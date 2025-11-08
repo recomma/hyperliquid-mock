@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -11,6 +12,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/vmihailenco/msgpack/v5"
 )
 
 // Handler manages HTTP requests for the mock server
@@ -45,8 +47,44 @@ func NewHandler(opts ...Option) *Handler {
 	}
 }
 
+// sortedMapToMsgpack converts a map to msgpack with sorted keys, matching go-hyperliquid's behavior
+func sortedMapToMsgpack(data interface{}) ([]byte, error) {
+	// Convert to map[string]interface{} if needed
+	var m map[string]interface{}
+	switch v := data.(type) {
+	case map[string]interface{}:
+		m = v
+	default:
+		// Try to convert via JSON round-trip
+		jsonBytes, err := json.Marshal(data)
+		if err != nil {
+			return nil, err
+		}
+		if err := json.Unmarshal(jsonBytes, &m); err != nil {
+			return nil, err
+		}
+	}
+
+	// Create a sorted map encoder
+	// msgpack encoder with sorted keys
+	encoder := msgpack.GetEncoder()
+	defer msgpack.PutEncoder(encoder)
+
+	encoder.SetSortMapKeys(true)
+	encoder.SetCustomStructTag("json") // Use json tags for field names
+
+	var buf []byte
+	encoder.ResetBytes(&buf)
+
+	if err := encoder.Encode(m); err != nil {
+		return nil, err
+	}
+
+	return buf, nil
+}
+
 // recoverWalletFromSignature attempts to recover the wallet address from the request signature
-// For the mock server, we use a simplified approach that works for testing
+// This implements the Hyperliquid L1 action signing format: msgpack(action) + nonce + vault + expires
 func (h *Handler) recoverWalletFromSignature(req *ExchangeRequest) (string, error) {
 	// Convert signature components from hex strings to bytes
 	rBytes, err := hex.DecodeString(strings.TrimPrefix(req.Signature.R, "0x"))
@@ -58,16 +96,37 @@ func (h *Handler) recoverWalletFromSignature(req *ExchangeRequest) (string, erro
 		return "", fmt.Errorf("invalid signature S: %w", err)
 	}
 
-	// Construct the message hash from the action
-	// In the real Hyperliquid protocol, this involves specific encoding
-	// For the mock server, we use a simplified hash of the JSON action
-	actionBytes, err := json.Marshal(req.Action)
+	// Msgpack encode the action with sorted keys (matching go-hyperliquid's SignL1Action)
+	actionBytes, err := sortedMapToMsgpack(req.Action)
 	if err != nil {
-		return "", fmt.Errorf("failed to marshal action: %w", err)
+		return "", fmt.Errorf("failed to msgpack encode action: %w", err)
 	}
 
-	// Create message hash
-	messageHash := crypto.Keccak256Hash(actionBytes)
+	// Build the message that was signed: msgpack(action) + nonce + vault + expires
+	// Based on go-hyperliquid's SignL1Action:
+	// 1. Msgpack-encoded action
+	// 2. Nonce (8 bytes, big endian uint64)
+	// 3. Vault address (20 bytes, zeros if empty)
+	// 4. Expires timestamp (8 bytes, big endian uint64, or 0 if not set)
+
+	messageBytes := make([]byte, 0, len(actionBytes)+8+20+8)
+	messageBytes = append(messageBytes, actionBytes...)
+
+	// Append nonce (8 bytes, big endian)
+	nonceBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(nonceBytes, uint64(req.Nonce))
+	messageBytes = append(messageBytes, nonceBytes...)
+
+	// Append vault address (20 bytes) - use zeros for non-vault accounts
+	vaultBytes := make([]byte, 20)
+	messageBytes = append(messageBytes, vaultBytes...)
+
+	// Append expires timestamp (8 bytes) - use 0 if not set
+	expiresBytes := make([]byte, 8)
+	messageBytes = append(messageBytes, expiresBytes...)
+
+	// Hash the complete message
+	messageHash := crypto.Keccak256Hash(messageBytes)
 
 	// Construct signature in the format expected by crypto.SigToPub
 	// Ethereum signatures are 65 bytes: R (32) + S (32) + V (1)

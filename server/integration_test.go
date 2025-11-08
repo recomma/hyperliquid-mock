@@ -51,7 +51,8 @@ func TestIntegrationWithGoHyperliquid(t *testing.T) {
 	}
 
 	// Create an order using the real go-hyperliquid library
-	cloid := "test-order-1"
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	cloid := "00000000000000000000000000000001"
 	orderReq := hyperliquid.CreateOrderRequest{
 		Coin:  "ETH",
 		IsBuy: true,
@@ -123,7 +124,8 @@ func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
 	// Create initial order
-	cloid := "test-modify-order"
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	cloid := "00000000000000000000000000000002"
 	_, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "BTC",
 		IsBuy: true,
@@ -199,7 +201,8 @@ func TestOrderCancellationWithGoHyperliquid(t *testing.T) {
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
 	// Create an order
-	cloid := "test-cancel-order"
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	cloid := "00000000000000000000000000000003"
 	_, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "SOL",
 		IsBuy: false,
@@ -260,7 +263,8 @@ func TestQueryOrderStatusWithGoHyperliquid(t *testing.T) {
 	// Create exchange to make an order
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
-	cloid := "test-query-order"
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	cloid := "00000000000000000000000000000004"
 	_, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "ARB",
 		IsBuy: true,
