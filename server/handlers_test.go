@@ -2,11 +2,97 @@ package server
 
 import (
 	"bytes"
+	"crypto/ecdsa"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/stretchr/testify/require"
 )
+
+const sampleOrderActionJSON = `{
+  "grouping": "na",
+  "type": "order",
+  "builder": { "b": "mock-builder", "f": 1 },
+  "orders": [
+    {
+      "a": 1,
+      "b": true,
+      "p": "3200.5",
+      "s": "0.75",
+      "r": false,
+      "c": "00000000000000000000000000000001",
+      "t": {
+        "limit": { "tif": "GTC" }
+      }
+    }
+  ]
+}`
+
+// TestRecoverWalletFromSignature ensures we can recover the wallet address for a
+// signed request using the deterministic msgpack encoding path.
+func TestRecoverWalletFromSignature(t *testing.T) {
+	handler := NewHandler()
+
+	privKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	expectedWallet := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
+
+	var action map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(sampleOrderActionJSON), &action))
+
+	const nonce int64 = 42
+
+	signature := signActionForTest(t, privKey, action, nonce)
+	req := &ExchangeRequest{
+		Action: action,
+		Nonce:  nonce,
+	}
+	req.Signature.R = signature.R
+	req.Signature.S = signature.S
+	req.Signature.V = signature.V
+
+	wallet, err := handler.recoverWalletFromSignature(req)
+	require.NoError(t, err)
+	require.Equal(t, expectedWallet, wallet)
+}
+
+type testSignature struct {
+	R string
+	S string
+	V int
+}
+
+func signActionForTest(t *testing.T, key *ecdsa.PrivateKey, action map[string]interface{}, nonce int64) testSignature {
+	t.Helper()
+
+	actionBytes, err := sortedMapToMsgpack(action)
+	require.NoError(t, err)
+
+	messageBytes := make([]byte, 0, len(actionBytes)+8+20+8)
+	messageBytes = append(messageBytes, actionBytes...)
+
+	nonceBytes := make([]byte, 8)
+	binary.BigEndian.PutUint64(nonceBytes, uint64(nonce))
+	messageBytes = append(messageBytes, nonceBytes...)
+
+	messageBytes = append(messageBytes, make([]byte, 20)...)
+	messageBytes = append(messageBytes, make([]byte, 8)...)
+
+	hash := crypto.Keccak256Hash(messageBytes)
+	sig, err := crypto.Sign(hash.Bytes(), key)
+	require.NoError(t, err)
+
+	return testSignature{
+		R: "0x" + hex.EncodeToString(sig[:32]),
+		S: "0x" + hex.EncodeToString(sig[32:64]),
+		V: int(sig[64]) + 27,
+	}
+}
 
 // TestHandleInfo_Meta tests the /info endpoint with type "meta"
 func TestHandleInfo_Meta(t *testing.T) {
