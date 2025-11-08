@@ -143,7 +143,7 @@ func TestProcessOrderRejectsLowPriceBtcIOC(t *testing.T) {
 		},
 	}
 
-	status := handler.processOrder(orderMap)
+	status := handler.processOrder(orderMap, "0xwallet1")
 
 	if status.Resting != nil {
 		t.Fatalf("expected no resting order, got %#v", status.Resting)
@@ -174,7 +174,7 @@ func TestProcessOrderAllowsOtherIocOrders(t *testing.T) {
 		},
 	}
 
-	status := handler.processOrder(orderMap)
+	status := handler.processOrder(orderMap, "0xwallet1")
 
 	if status.Error != nil {
 		t.Fatalf("expected no error, got %q", *status.Error)
