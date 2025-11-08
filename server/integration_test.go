@@ -151,7 +151,7 @@ func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 	// Modify the order (use OID as hex string)
 	oidHex := fmt.Sprintf("0x%x", oid)
 	_, err = exchange.ModifyOrder(ctx, hyperliquid.ModifyOrderRequest{
-		Oid: oidHex,
+		Cloid: &hyperliquid.Cloid{Value: oidHex},
 		Order: hyperliquid.CreateOrderRequest{
 			Coin:  "BTC",
 			IsBuy: true,
