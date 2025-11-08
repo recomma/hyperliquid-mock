@@ -348,6 +348,7 @@ func (wsm *WebSocketManager) BroadcastOrderUpdate(order *OrderDetail) {
 
 // broadcastOrderUpdates broadcasts order updates to subscribed clients
 // Orders are filtered by wallet - each client only receives updates for their own orders
+// Orders without a wallet (signature recovery failed) are broadcast to all subscribers for backward compatibility
 func (wsm *WebSocketManager) broadcastOrderUpdates() {
 	for update := range wsm.orderUpdatesCh {
 		wsm.mu.RLock()
@@ -356,18 +357,30 @@ func (wsm *WebSocketManager) broadcastOrderUpdates() {
 			subscribedUser := state.orderUpdatesUser
 			state.mu.RUnlock()
 
-			// Only send updates if:
-			// 1. Client is subscribed to orderUpdates (subscribedUser != "")
-			// 2. The order belongs to the subscribed user
-			if subscribedUser != "" && len(update.Orders) > 0 {
+			// Skip if not subscribed to orderUpdates
+			if subscribedUser == "" {
+				continue
+			}
+
+			// Determine if this update should be sent to this subscriber
+			shouldSend := false
+			if len(update.Orders) > 0 {
 				orderUser := update.Orders[0].Order.User
-				if orderUser == subscribedUser {
-					msg := map[string]interface{}{
-						"channel": "orderUpdates",
-						"data":    update.Orders,
-					}
-					wsm.sendJSON(conn, msg)
+
+				// Send if:
+				// 1. Order has no wallet (signature recovery failed) - backward compatibility
+				// 2. Order wallet matches subscriber wallet - proper isolation
+				if orderUser == "" || orderUser == subscribedUser {
+					shouldSend = true
 				}
+			}
+
+			if shouldSend {
+				msg := map[string]interface{}{
+					"channel": "orderUpdates",
+					"data":    update.Orders,
+				}
+				wsm.sendJSON(conn, msg)
 			}
 		}
 		wsm.mu.RUnlock()
