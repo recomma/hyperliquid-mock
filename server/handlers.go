@@ -113,12 +113,12 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	// Extract wallet address from signature
 	walletAddr, err := h.recoverWalletFromSignature(&req)
 	if err != nil {
-		h.logger.Warn("failed to recover wallet from signature", "error", err)
+		h.logger.Debug("signature recovery failed, order will not be wallet-isolated", "error", err)
 		// For backward compatibility, allow requests without valid signatures
-		// but log the warning
+		// Orders created without a wallet will be accessible to all queries
 		walletAddr = ""
 	} else {
-		h.logger.Debug("recovered wallet address", "wallet", walletAddr)
+		h.logger.Info("recovered wallet address from signature", "wallet", walletAddr)
 	}
 
 	// Parse the action to determine the operation type
