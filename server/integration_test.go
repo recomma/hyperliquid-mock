@@ -116,6 +116,102 @@ func TestIntegrationWithGoHyperliquid(t *testing.T) {
 	}
 }
 
+// TestIntegrationWithGoHyperliquid demonstrates using the mock server with the real go-hyperliquid library
+func TestIntegrationWithGoHyperliquidWithNumericOID(t *testing.T) {
+	// Create isolated test server
+	ts := server.NewTestServer(t)
+	ctx := context.Background()
+
+	// Create a test private key
+	privateKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	pub := privateKey.Public()
+	pubECDSA, ok := pub.(*ecdsa.PublicKey)
+	require.True(t, ok, "expected ECDSA public key")
+	// Get wallet address from private key
+	walletAddr := crypto.PubkeyToAddress(*pubECDSA).Hex()
+
+	t.Logf("Creating exchange client for wallet: %s", walletAddr)
+	t.Logf("Mock server URL: %s", ts.URL())
+
+	// Create exchange client pointing to mock server
+	// This will internally call NewInfo which fetches meta from the server
+	exchange := hyperliquid.NewExchange(
+		ctx,
+		privateKey,
+		ts.URL(), // Point to our mock server!
+		nil,      // Meta will be fetched from mock
+		"",       // vaultAddr (empty for non-vault accounts)
+		walletAddr,
+		nil, // SpotMeta will be fetched from mock
+	)
+
+	// Log what requests were made during exchange creation
+	infoReqs := ts.GetInfoRequests()
+	t.Logf("Info requests made during NewExchange: %d", len(infoReqs))
+	for i, req := range infoReqs {
+		t.Logf("  Request %d: type=%s", i, req.Type)
+	}
+
+	// Create an order using the real go-hyperliquid library
+	orderReq := hyperliquid.CreateOrderRequest{
+		Coin:  "ETH",
+		IsBuy: true,
+		Size:  1.5,
+		Price: 3000.0,
+		OrderType: hyperliquid.OrderType{
+			Limit: &hyperliquid.LimitOrderType{
+				Tif: hyperliquid.TifGtc,
+			},
+		},
+	}
+
+	status, err := exchange.Order(ctx, orderReq, nil)
+	if err != nil {
+		t.Fatalf("Failed to create order: %v", err)
+	}
+
+	// Verify we got a response
+	if status.Resting == nil {
+		t.Error("Expected resting order status")
+	}
+
+	// Now inspect what was actually sent to the mock server
+	exchangeReqs := ts.GetExchangeRequests()
+	if len(exchangeReqs) != 1 {
+		t.Fatalf("Expected 1 exchange request, got %d", len(exchangeReqs))
+	}
+
+	// Verify the request structure
+	req := exchangeReqs[0]
+	if req.Nonce == 0 {
+		t.Error("Expected non-zero nonce")
+	}
+
+	if req.Signature.R == "" || req.Signature.S == "" {
+		t.Error("Expected signature to be present")
+	}
+
+	// Verify order was stored in mock server state
+	order, exists := ts.GetOrder(*status.Resting.ClientID)
+	if !exists {
+		t.Fatal("Order not found in server state")
+	}
+
+	if order.Order.Coin != "ETH" {
+		t.Errorf("Expected coin ETH, got %s", order.Order.Coin)
+	}
+
+	if order.Order.Side != "B" {
+		t.Errorf("Expected side B (buy), got %s", order.Order.Side)
+	}
+
+	if order.Status != "open" {
+		t.Errorf("Expected status open, got %s", order.Status)
+	}
+}
+
 // TestOrderModificationWithGoHyperliquid demonstrates testing order modifications
 func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 	ts := server.NewTestServer(t)
