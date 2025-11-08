@@ -3,12 +3,16 @@ package server_test
 import (
 	"context"
 	"crypto/ecdsa"
+	"crypto/rand"
 	"fmt"
+	"log/slog"
+	"os"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/recomma/hyperliquid-mock/server"
 	"github.com/sonirico/go-hyperliquid"
+	"github.com/stretchr/testify/require"
 )
 
 // TestIntegrationWithGoHyperliquid demonstrates using the mock server with the real go-hyperliquid library
@@ -18,14 +22,13 @@ func TestIntegrationWithGoHyperliquid(t *testing.T) {
 	ctx := context.Background()
 
 	// Create a test private key
-	privateKey, err := crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
-	if err != nil {
-		t.Fatalf("Failed to create private key: %v", err)
-	}
+	privateKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
 
-	// Get wallet address from private key
 	pub := privateKey.Public()
-	pubECDSA, _ := pub.(*ecdsa.PublicKey)
+	pubECDSA, ok := pub.(*ecdsa.PublicKey)
+	require.True(t, ok, "expected ECDSA public key")
+	// Get wallet address from private key
 	walletAddr := crypto.PubkeyToAddress(*pubECDSA).Hex()
 
 	t.Logf("Creating exchange client for wallet: %s", walletAddr)
@@ -51,7 +54,10 @@ func TestIntegrationWithGoHyperliquid(t *testing.T) {
 	}
 
 	// Create an order using the real go-hyperliquid library
-	cloid := "test-order-1"
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
 	orderReq := hyperliquid.CreateOrderRequest{
 		Coin:  "ETH",
 		IsBuy: true,
@@ -110,21 +116,125 @@ func TestIntegrationWithGoHyperliquid(t *testing.T) {
 	}
 }
 
+// TestIntegrationWithGoHyperliquid demonstrates using the mock server with the real go-hyperliquid library
+func TestIntegrationWithGoHyperliquidWithNumericOID(t *testing.T) {
+	// Create isolated test server
+	ts := server.NewTestServer(t)
+	ctx := context.Background()
+
+	// Create a test private key
+	privateKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
+	pub := privateKey.Public()
+	pubECDSA, ok := pub.(*ecdsa.PublicKey)
+	require.True(t, ok, "expected ECDSA public key")
+	// Get wallet address from private key
+	walletAddr := crypto.PubkeyToAddress(*pubECDSA).Hex()
+
+	t.Logf("Creating exchange client for wallet: %s", walletAddr)
+	t.Logf("Mock server URL: %s", ts.URL())
+
+	// Create exchange client pointing to mock server
+	// This will internally call NewInfo which fetches meta from the server
+	exchange := hyperliquid.NewExchange(
+		ctx,
+		privateKey,
+		ts.URL(), // Point to our mock server!
+		nil,      // Meta will be fetched from mock
+		"",       // vaultAddr (empty for non-vault accounts)
+		walletAddr,
+		nil, // SpotMeta will be fetched from mock
+	)
+
+	// Log what requests were made during exchange creation
+	infoReqs := ts.GetInfoRequests()
+	t.Logf("Info requests made during NewExchange: %d", len(infoReqs))
+	for i, req := range infoReqs {
+		t.Logf("  Request %d: type=%s", i, req.Type)
+	}
+
+	// Create an order using the real go-hyperliquid library
+	orderReq := hyperliquid.CreateOrderRequest{
+		Coin:  "ETH",
+		IsBuy: true,
+		Size:  1.5,
+		Price: 3000.0,
+		OrderType: hyperliquid.OrderType{
+			Limit: &hyperliquid.LimitOrderType{
+				Tif: hyperliquid.TifGtc,
+			},
+		},
+	}
+
+	status, err := exchange.Order(ctx, orderReq, nil)
+	if err != nil {
+		t.Fatalf("Failed to create order: %v", err)
+	}
+
+	// Verify we got a response
+	if status.Resting == nil {
+		t.Error("Expected resting order status")
+	}
+
+	// Now inspect what was actually sent to the mock server
+	exchangeReqs := ts.GetExchangeRequests()
+	if len(exchangeReqs) != 1 {
+		t.Fatalf("Expected 1 exchange request, got %d", len(exchangeReqs))
+	}
+
+	// Verify the request structure
+	req := exchangeReqs[0]
+	if req.Nonce == 0 {
+		t.Error("Expected non-zero nonce")
+	}
+
+	if req.Signature.R == "" || req.Signature.S == "" {
+		t.Error("Expected signature to be present")
+	}
+
+	// Verify order was stored in mock server state
+	order, exists := ts.GetOrder(*status.Resting.ClientID)
+	if !exists {
+		t.Fatal("Order not found in server state")
+	}
+
+	if order.Order.Coin != "ETH" {
+		t.Errorf("Expected coin ETH, got %s", order.Order.Coin)
+	}
+
+	if order.Order.Side != "B" {
+		t.Errorf("Expected side B (buy), got %s", order.Order.Side)
+	}
+
+	if order.Status != "open" {
+		t.Errorf("Expected status open, got %s", order.Status)
+	}
+}
+
 // TestOrderModificationWithGoHyperliquid demonstrates testing order modifications
 func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 	ts := server.NewTestServer(t)
 	ctx := context.Background()
 
-	privateKey, _ := crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
+	// Create a test private key
+	privateKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
 	pub := privateKey.Public()
-	pubECDSA, _ := pub.(*ecdsa.PublicKey)
+	pubECDSA, ok := pub.(*ecdsa.PublicKey)
+	require.True(t, ok, "expected ECDSA public key")
+	// Get wallet address from private key
 	walletAddr := crypto.PubkeyToAddress(*pubECDSA).Hex()
 
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
 	// Create initial order
-	cloid := "test-modify-order"
-	_, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
+	_, err = exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "BTC",
 		IsBuy: true,
 		Size:  0.5,
@@ -143,15 +253,12 @@ func TestOrderModificationWithGoHyperliquid(t *testing.T) {
 	if !exists {
 		t.Fatal("Order not found")
 	}
-	oid := order.Order.Oid
 
 	// Clear request history to focus on the modify
 	ts.ClearRequests()
 
-	// Modify the order (use OID as hex string)
-	oidHex := fmt.Sprintf("0x%x", oid)
 	_, err = exchange.ModifyOrder(ctx, hyperliquid.ModifyOrderRequest{
-		Oid: oidHex,
+		Cloid: &hyperliquid.Cloid{Value: *order.Order.Cloid},
 		Order: hyperliquid.CreateOrderRequest{
 			Coin:  "BTC",
 			IsBuy: true,
@@ -191,16 +298,24 @@ func TestOrderCancellationWithGoHyperliquid(t *testing.T) {
 	ts := server.NewTestServer(t)
 	ctx := context.Background()
 
-	privateKey, _ := crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
+	// Create a test private key
+	privateKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
 	pub := privateKey.Public()
-	pubECDSA, _ := pub.(*ecdsa.PublicKey)
+	pubECDSA, ok := pub.(*ecdsa.PublicKey)
+	require.True(t, ok, "expected ECDSA public key")
+	// Get wallet address from private key
 	walletAddr := crypto.PubkeyToAddress(*pubECDSA).Hex()
 
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
 	// Create an order
-	cloid := "test-cancel-order"
-	_, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
+	_, err = exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "SOL",
 		IsBuy: false,
 		Size:  10.0,
@@ -249,19 +364,28 @@ func TestOrderCancellationWithGoHyperliquid(t *testing.T) {
 
 // TestQueryOrderStatusWithGoHyperliquid demonstrates testing order status queries
 func TestQueryOrderStatusWithGoHyperliquid(t *testing.T) {
-	ts := server.NewTestServer(t)
+	logger := slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	ts := server.NewTestServer(t, server.WithLogger(logger))
 	ctx := context.Background()
 
-	privateKey, _ := crypto.HexToECDSA("0000000000000000000000000000000000000000000000000000000000000001")
+	// Create a test private key
+	privateKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+
 	pub := privateKey.Public()
-	pubECDSA, _ := pub.(*ecdsa.PublicKey)
+	pubECDSA, ok := pub.(*ecdsa.PublicKey)
+	require.True(t, ok, "expected ECDSA public key")
+	// Get wallet address from private key
 	walletAddr := crypto.PubkeyToAddress(*pubECDSA).Hex()
 
 	// Create exchange to make an order
 	exchange := hyperliquid.NewExchange(ctx, privateKey, ts.URL(), nil, "", walletAddr, nil)
 
-	cloid := "test-query-order"
-	_, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
+	// CLOID must be exactly 32 hex characters (16 bytes)
+	token := make([]byte, 16)
+	rand.Read(token)
+	cloid := fmt.Sprintf("0x%x", token)
+	_, err = exchange.Order(ctx, hyperliquid.CreateOrderRequest{
 		Coin:  "ARB",
 		IsBuy: true,
 		Size:  100.0,

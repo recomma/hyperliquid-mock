@@ -42,6 +42,8 @@ func NewHandler(opts ...Option) *Handler {
 	}
 }
 
+// recoverWalletFromSignature is implemented in signature_recovery.go
+
 // HandleExchange handles POST /exchange requests
 func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -58,6 +60,17 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 
 	h.logger.Debug("exchange request received", "request", req)
 
+	// Extract wallet address from signature
+	walletAddr, err := h.recoverWalletFromSignature(&req)
+	if err != nil {
+		h.logger.Debug("signature recovery failed, order will not be wallet-isolated", "error", err)
+		// For backward compatibility, allow requests without valid signatures
+		// Orders created without a wallet will be accessible to all queries
+		walletAddr = ""
+	} else {
+		h.logger.Info("recovered wallet address from signature", "wallet", walletAddr)
+	}
+
 	// Parse the action to determine the operation type
 	actionMap, ok := req.Action.(map[string]interface{})
 	if !ok {
@@ -70,11 +83,11 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	if order, ok := actionMap["type"].(string); ok {
 		switch order {
 		case "order":
-			response = h.handleOrder(actionMap)
+			response = h.handleOrder(actionMap, walletAddr)
 		case "cancel", "cancelByCloid":
 			response = h.handleCancel(actionMap)
 		case "modify":
-			response = h.handleModify(actionMap)
+			response = h.handleModify(actionMap, walletAddr)
 		case "batchModify":
 			response = h.handleBatchModify(actionMap)
 		default:
@@ -83,7 +96,7 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Try to detect action type from the structure
 		if _, hasOrders := actionMap["orders"]; hasOrders {
-			response = h.handleOrder(actionMap)
+			response = h.handleOrder(actionMap, walletAddr)
 		} else if _, hasCancels := actionMap["cancels"]; hasCancels {
 			response = h.handleCancel(actionMap)
 		} else if _, hasModifies := actionMap["modifies"]; hasModifies {
@@ -100,7 +113,7 @@ func (h *Handler) HandleExchange(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleOrder processes order creation/modification
-func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
+func (h *Handler) handleOrder(action map[string]interface{}, walletAddr string) ExchangeResponse {
 	// Extract order details
 	var statuses []OrderStatusResponse
 
@@ -108,12 +121,12 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 	if orders, ok := action["orders"].([]interface{}); ok {
 		for _, o := range orders {
 			orderMap, _ := o.(map[string]interface{})
-			status := h.processOrder(orderMap)
+			status := h.processOrder(orderMap, walletAddr)
 			statuses = append(statuses, status)
 		}
 	} else {
 		// Single order
-		status := h.processOrder(action)
+		status := h.processOrder(action, walletAddr)
 		statuses = append(statuses, status)
 	}
 
@@ -129,7 +142,7 @@ func (h *Handler) handleOrder(action map[string]interface{}) ExchangeResponse {
 }
 
 // processOrder creates or modifies a single order
-func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusResponse {
+func (h *Handler) processOrder(orderMap map[string]interface{}, walletAddr string) OrderStatusResponse {
 	// Handle both full field names and abbreviated format
 	// Abbreviated: a=asset, b=is_buy, c=cloid, o=oid, p=price, s=size
 	var coin string
@@ -230,7 +243,7 @@ func (h *Handler) processOrder(orderMap map[string]interface{}) OrderStatusRespo
 		cloid = fmt.Sprintf("mock-%d", time.Now().UnixNano())
 	}
 
-	newOid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr)
+	newOid := h.state.CreateOrder(cloid, coin, side, pxStr, szStr, walletAddr)
 
 	return OrderStatusResponse{
 		Resting: &RestingStatus{Oid: newOid, Cloid: &cloid},
@@ -272,7 +285,7 @@ func (h *Handler) mapAssetIndexToCoin(index int) string {
 }
 
 // handleModify processes a single order modification
-func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
+func (h *Handler) handleModify(action map[string]interface{}, walletAddr string) ExchangeResponse {
 	// Extract oid (can be numeric or hex string)
 	var oid int64
 	var hasOid bool
@@ -331,7 +344,7 @@ func (h *Handler) handleModify(action map[string]interface{}) ExchangeResponse {
 	orderMap["o"] = float64(oid)
 
 	// Process the modification
-	status := h.processOrder(orderMap)
+	status := h.processOrder(orderMap, walletAddr)
 
 	return ExchangeResponse{
 		Status: "ok",
@@ -511,24 +524,21 @@ func (h *Handler) HandleInfo(w http.ResponseWriter, r *http.Request) {
 
 // handleOrderStatus queries order status by cloid or oid
 func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
-	var order *OrderDetail
-	var exists bool
+	var (
+		order  *OrderDetail
+		exists bool
+	)
 
-	if req.Oid != nil && !req.Oid.Valid() && req.Cloid == nil {
-		if raw := req.Oid.Raw(); raw != "" {
-			req.Cloid = &raw
-		}
+	if req.Oid == nil && req.User == "" {
+		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
-	// Try to query by OID first
-	if req.Oid != nil && req.Oid.Valid() {
+	switch {
+	case req.Oid != nil && req.Oid.Raw() == "" && req.Oid.Valid():
 		order, exists = h.state.GetOrderByOid(req.Oid.Int64())
-	} else if req.Cloid != nil && *req.Cloid != "" {
-		// Query by CLOID
-		order, exists = h.state.GetOrder(*req.Cloid)
-	} else if req.User != "" {
-		// In a real implementation, we'd filter by user
-		// For the mock, we just return unknown
+	case req.Oid != nil && req.Oid.Raw() != "":
+		order, exists = h.state.GetOrder(req.Oid.Raw())
+	case req.User != "":
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
@@ -536,10 +546,11 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 		return OrderQueryResult{Status: "unknown_cloid"}
 	}
 
-	return OrderQueryResult{
-		Status: "order",
-		Order:  order,
+	if order.Order.User != req.User {
+		h.logger.Debug("order present but user does not match", slog.String("order.User", order.Order.User), slog.String("req.User", req.User))
+		return OrderQueryResult{Status: "unknown_cloid"}
 	}
+	return OrderQueryResult{Status: "order", Order: order}
 }
 
 // handleMetaAndAssetCtxs returns mock perpetual futures metadata

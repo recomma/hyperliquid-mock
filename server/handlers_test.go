@@ -2,11 +2,88 @@ package server
 
 import (
 	"bytes"
+	"crypto/ecdsa"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"github.com/ethereum/go-ethereum/crypto"
+	hyperliquid "github.com/sonirico/go-hyperliquid"
+	"github.com/stretchr/testify/require"
 )
+
+const sampleOrderActionJSON = `{
+  "grouping": "na",
+  "type": "order",
+  "builder": { "b": "mock-builder", "f": 1 },
+  "orders": [
+    {
+      "a": 1,
+      "b": true,
+      "p": "3200.5",
+      "s": "0.75",
+      "r": false,
+      "c": "00000000000000000000000000000001",
+      "t": {
+        "limit": { "tif": "GTC" }
+      }
+    }
+  ]
+}`
+
+// TestRecoverWalletFromSignature ensures we can recover the wallet address for a
+// signed request using the deterministic msgpack encoding path.
+func TestRecoverWalletFromSignature(t *testing.T) {
+	handler := NewHandler()
+
+	privKey, err := crypto.GenerateKey()
+	require.NoError(t, err)
+	expectedWallet := crypto.PubkeyToAddress(privKey.PublicKey).Hex()
+
+	var action map[string]interface{}
+	require.NoError(t, json.Unmarshal([]byte(sampleOrderActionJSON), &action))
+
+	const nonce int64 = 42
+
+	signature := signActionForTest(t, privKey, action, nonce)
+	req := &ExchangeRequest{
+		Action: action,
+		Nonce:  nonce,
+	}
+	req.Signature.R = signature.R
+	req.Signature.S = signature.S
+	req.Signature.V = signature.V
+
+	wallet, err := handler.recoverWalletFromSignature(req)
+	require.NoError(t, err)
+	require.Equal(t, expectedWallet, wallet)
+}
+
+type testSignature struct {
+	R string
+	S string
+	V int
+}
+
+func signActionForTest(t *testing.T, key *ecdsa.PrivateKey, action map[string]interface{}, nonce int64) testSignature {
+	t.Helper()
+
+	body, err := json.Marshal(action)
+	require.NoError(t, err)
+
+	var typed hyperliquid.OrderAction
+	require.NoError(t, json.Unmarshal(body, &typed))
+
+	sig, err := hyperliquid.SignL1Action(key, typed, "", nonce, nil, false)
+	require.NoError(t, err)
+
+	return testSignature{
+		R: sig.R,
+		S: sig.S,
+		V: sig.V,
+	}
+}
 
 // TestHandleInfo_Meta tests the /info endpoint with type "meta"
 func TestHandleInfo_Meta(t *testing.T) {
@@ -143,7 +220,7 @@ func TestProcessOrderRejectsLowPriceBtcIOC(t *testing.T) {
 		},
 	}
 
-	status := handler.processOrder(orderMap)
+	status := handler.processOrder(orderMap, "0xwallet1")
 
 	if status.Resting != nil {
 		t.Fatalf("expected no resting order, got %#v", status.Resting)
@@ -174,7 +251,7 @@ func TestProcessOrderAllowsOtherIocOrders(t *testing.T) {
 		},
 	}
 
-	status := handler.processOrder(orderMap)
+	status := handler.processOrder(orderMap, "0xwallet1")
 
 	if status.Error != nil {
 		t.Fatalf("expected no error, got %q", *status.Error)

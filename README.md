@@ -4,9 +4,9 @@ A minimal Go implementation of the Hyperliquid API for E2E testing without requi
 
 ## Features
 
-- **No authentication validation** - Accepts all requests without signature verification
+- **Signature validation and wallet isolation** - Recovers wallet addresses from ECDSA signatures for proper multi-wallet testing
 - **In-memory order state** - Tracks orders for realistic responses
-- **WebSocket support** - Real-time order updates and market data (BBO)
+- **WebSocket support** - Real-time order updates and market data (BBO) with wallet-based filtering
 - **Unlimited requests** - No rate limiting
 - **Simple responses** - Returns success for all valid operations
 
@@ -110,6 +110,47 @@ ws.onmessage = (event) => {
 };
 ```
 
+## Wallet Isolation
+
+The mock server implements proper wallet isolation to support multi-wallet testing scenarios. Each order is tagged with the wallet address recovered from its ECDSA signature, ensuring that:
+
+- **WebSocket subscriptions** only receive updates for orders belonging to the subscribed wallet
+- **Order queries** only return orders owned by the requesting wallet
+- **Different wallets** can operate independently without interference
+
+### Signature Recovery
+
+The server recovers wallet addresses from ECDSA signatures using the same EIP-712 signing format as the real Hyperliquid API:
+
+1. Msgpack-encodes the action with sorted keys
+2. Appends nonce, vault address (optional), and expiration timestamp (optional)
+3. Creates an EIP-712 typed data structure with "Agent" phantom type
+4. Recovers the public key from the signature
+5. Derives the Ethereum address
+
+This allows the mock server to properly isolate orders by wallet without requiring manual configuration.
+
+### Testing Multi-Wallet Scenarios
+
+```go
+// Create two different wallets
+privateKey1, _ := crypto.GenerateKey()
+privateKey2, _ := crypto.GenerateKey()
+
+wallet1 := crypto.PubkeyToAddress(privateKey1.PublicKey).Hex()
+wallet2 := crypto.PubkeyToAddress(privateKey2.PublicKey).Hex()
+
+// Create exchanges for each wallet
+exchange1 := hyperliquid.NewExchange(ctx, privateKey1, ts.URL(), nil, "", wallet1, nil)
+exchange2 := hyperliquid.NewExchange(ctx, privateKey2, ts.URL(), nil, "", wallet2, nil)
+
+// Orders are automatically isolated by wallet
+exchange1.Order(ctx, order1, nil)  // Only visible to wallet1
+exchange2.Order(ctx, order2, nil)  // Only visible to wallet2
+```
+
+See `server/integration_test.go` for complete multi-wallet test examples.
+
 ### POST /exchange
 
 Handles trading actions:
@@ -129,7 +170,7 @@ Handles trading actions:
       "limit_px": 3000.00,
       "reduce_only": false,
       "order_type": {"limit": {"tif": "Gtc"}},
-      "cloid": "0x1234..."
+      "cloid": "00000000000000000000000000000001"
     }]
   },
   "nonce": 1234567890,
@@ -188,7 +229,7 @@ Handles queries:
       "oid": 1000001,
       "timestamp": 1234567890000,
       "origSz": "1.5",
-      "cloid": "0x1234..."
+      "cloid": "00000000000000000000000000000001"
     },
     "status": "open",
     "statusTimestamp": 1234567890000
@@ -247,7 +288,10 @@ func TestMyHyperliquidCode(t *testing.T) {
     )
 
     // Run your test code
-    cloid := "my-cloid"
+    // CLOID must be exactly 32 hex characters (16 bytes)
+    token := make([]byte, 16)
+    rand.Read(token)
+    cloid := hex.EncodeToString(token)
     status, err := exchange.Order(ctx, hyperliquid.CreateOrderRequest{
         Coin:  "ETH",
         IsBuy: true,
@@ -266,7 +310,7 @@ func TestMyHyperliquidCode(t *testing.T) {
     }
 
     // Check server state
-    order, exists := ts.GetOrder("my-cloid")
+    order, exists := ts.GetOrder(cloid)
     if !exists {
         t.Fatal("Order not found")
     }
@@ -347,8 +391,8 @@ for _, req := range rawReqs {
 Check the server's internal order state:
 
 ```go
-// Get order by CLOID
-order, exists := ts.GetOrder("my-cloid-123")
+// Get order by CLOID (must be the exact CLOID used when creating the order)
+order, exists := ts.GetOrder("00000000000000000000000000000001")
 if exists {
     fmt.Println(order.Order.Coin)    // "ETH"
     fmt.Println(order.Status)         // "open"
@@ -421,7 +465,7 @@ You can also test the mock server manually using curl:
 # Health check
 curl http://localhost:8080/health
 
-# Create an order
+# Create an order (note: CLOID must be 32 hex characters)
 curl -X POST http://localhost:8080/exchange \
   -H "Content-Type: application/json" \
   -d '{
@@ -432,7 +476,7 @@ curl -X POST http://localhost:8080/exchange \
         "is_buy": true,
         "sz": 1.0,
         "limit_px": 3000.00,
-        "cloid": "test-order-1"
+        "cloid": "00000000000000000000000000000001"
       }]
     },
     "nonce": 123,
@@ -447,12 +491,12 @@ curl -X POST http://localhost:8080/info \
 
 ## Limitations
 
-- **No signature validation** - All requests are accepted regardless of signature
-- **No real order matching** - Orders are just stored in memory
+- **No real order matching** - Orders are just stored in memory, no actual trading logic
 - **Limited WebSocket subscriptions** - Only orderUpdates and l2Book/bbo (no trades, candles, etc.)
-- **Simplified responses** - Some fields may be omitted or simplified
+- **Simplified responses** - Some fields may be omitted or simplified compared to production API
 - **No persistence** - All state is lost when the server restarts
 - **No rate limiting** - Unlimited requests accepted
+- **Testnet behavior** - Signature recovery uses testnet EIP-712 domain (chainId: 1337)
 
 ## Development
 
@@ -476,6 +520,7 @@ hyperliquid-mock/
     ├── server.go              # HTTP server setup
     ├── handlers.go            # Request handlers
     ├── handlers_test.go       # Handler unit tests
+    ├── signature_recovery.go  # ECDSA signature recovery for wallet isolation
     ├── websocket.go           # WebSocket connection & subscription management
     ├── websocket_example_test.go  # WebSocket usage examples
     ├── types.go               # Request/response types
