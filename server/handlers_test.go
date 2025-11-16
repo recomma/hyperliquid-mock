@@ -306,11 +306,18 @@ func TestHandleInfo_SpotMeta(t *testing.T) {
 
 	// Check for expected tokens
 	foundUSDC := false
+	foundDOGE := false
 	for _, token := range response.Tokens {
 		if token.Name == "USDC" {
 			foundUSDC = true
 			if token.SzDecimals != 6 {
 				t.Errorf("USDC: expected szDecimals=6, got %d", token.SzDecimals)
+			}
+		}
+		if token.Name == "DOGE" {
+			foundDOGE = true
+			if token.SzDecimals != 1 {
+				t.Errorf("DOGE: expected szDecimals=1, got %d", token.SzDecimals)
 			}
 		}
 	}
@@ -319,7 +326,69 @@ func TestHandleInfo_SpotMeta(t *testing.T) {
 		t.Error("Expected to find USDC in tokens")
 	}
 
+	if !foundDOGE {
+		t.Error("Expected to find DOGE in tokens")
+	}
+
 	t.Logf("✓ SpotMeta response: %d tokens, %d trading pairs", len(response.Tokens), len(response.Universe))
+}
+
+// TestHandleInfo_SpotMetaAndAssetCtxs validates the combined spot metadata and asset contexts
+func TestHandleInfo_SpotMetaAndAssetCtxs(t *testing.T) {
+	handler := NewHandler()
+
+	reqBody := InfoRequest{Type: "spotMetaAndAssetCtxs"}
+	bodyBytes, err := json.Marshal(reqBody)
+	if err != nil {
+		t.Fatalf("Failed to marshal request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/info", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.HandleInfo(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("Expected status 200, got %d (body: %s)", w.Code, w.Body.String())
+	}
+
+	var response SpotMetaAndAssetCtxs
+	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
+		t.Fatalf("Failed to unmarshal response: %v (body: %s)", err, w.Body.String())
+	}
+
+	if len(response.Tokens) == 0 {
+		t.Fatal("Expected tokens to be present")
+	}
+
+	if len(response.AssetCtxs) == 0 {
+		t.Fatal("Expected assetCtxs to be present")
+	}
+
+	foundDOGE := false
+	for _, token := range response.Tokens {
+		if token.Name == "DOGE" {
+			foundDOGE = true
+			break
+		}
+	}
+
+	if !foundDOGE {
+		t.Fatal("Expected DOGE token in spot metadata")
+	}
+
+	foundDOGECtx := false
+	for _, ctx := range response.AssetCtxs {
+		if ctx.Coin == "DOGE" {
+			foundDOGECtx = true
+			break
+		}
+	}
+
+	if !foundDOGECtx {
+		t.Fatal("Expected DOGE asset context in response")
+	}
 }
 
 // TestHandleInfo_MetaAndAssetCtxs tests the existing metaAndAssetCtxs endpoint

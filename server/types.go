@@ -217,12 +217,15 @@ func (m *MetaAndAssetCtxs) UnmarshalJSON(data []byte) error {
 
 // SpotToken represents a spot trading token
 type SpotToken struct {
-	Name        string `json:"name"`
-	SzDecimals  int    `json:"szDecimals"`
-	WeiDecimals int    `json:"weiDecimals"`
-	Index       int    `json:"index"`
-	TokenId     string `json:"tokenId"`
-	IsCanonical bool   `json:"isCanonical"`
+	Name                    string  `json:"name"`
+	SzDecimals              int     `json:"szDecimals"`
+	WeiDecimals             int     `json:"weiDecimals"`
+	Index                   int     `json:"index"`
+	TokenId                 string  `json:"tokenId"`
+	IsCanonical             bool    `json:"isCanonical"`
+	EvmContract             *string `json:"evmContract,omitempty"`
+	FullName                *string `json:"fullName,omitempty"`
+	DeployerTradingFeeShare string  `json:"deployerTradingFeeShare,omitempty"`
 }
 
 // SpotUniverse represents a spot trading pair
@@ -234,8 +237,76 @@ type SpotUniverse struct {
 
 // SpotMetaAndAssetCtxs is the response for spot metadata queries
 type SpotMetaAndAssetCtxs struct {
-	Tokens   []SpotToken    `json:"tokens"`
-	Universe []SpotUniverse `json:"universe"`
+	Tokens    []SpotToken    `json:"tokens"`
+	Universe  []SpotUniverse `json:"universe"`
+	AssetCtxs []SpotAssetCtx `json:"assetCtxs"`
+}
+
+// SpotAssetCtx represents asset context data for spot tokens
+type SpotAssetCtx struct {
+	PrevDayPx         string `json:"prevDayPx"`
+	DayNtlVlm         string `json:"dayNtlVlm"`
+	MarkPx            string `json:"markPx"`
+	MidPx             string `json:"midPx"`
+	CirculatingSupply string `json:"circulatingSupply"`
+	Coin              string `json:"coin"`
+	TotalSupply       string `json:"totalSupply"`
+	DayBaseVlm        string `json:"dayBaseVlm"`
+}
+
+// MarshalJSON implements custom JSON marshaling for SpotMetaAndAssetCtxs to
+// match the array response returned by the real API: [meta, assetCtxs].
+func (m SpotMetaAndAssetCtxs) MarshalJSON() ([]byte, error) {
+	meta := struct {
+		Tokens   []SpotToken    `json:"tokens"`
+		Universe []SpotUniverse `json:"universe"`
+	}{Tokens: m.Tokens, Universe: m.Universe}
+
+	return json.Marshal([]interface{}{meta, m.AssetCtxs})
+}
+
+// UnmarshalJSON accepts both the array representation returned by the real API
+// and a map representation for flexibility in tests.
+func (m *SpotMetaAndAssetCtxs) UnmarshalJSON(data []byte) error {
+	var arrayForm []json.RawMessage
+	if err := json.Unmarshal(data, &arrayForm); err == nil {
+		if len(arrayForm) != 2 {
+			return fmt.Errorf("expected 2 elements in spotMetaAndAssetCtxs response, got %d", len(arrayForm))
+		}
+
+		var meta struct {
+			Tokens   []SpotToken    `json:"tokens"`
+			Universe []SpotUniverse `json:"universe"`
+		}
+		if err := json.Unmarshal(arrayForm[0], &meta); err != nil {
+			return err
+		}
+
+		var assetCtxs []SpotAssetCtx
+		if err := json.Unmarshal(arrayForm[1], &assetCtxs); err != nil {
+			return err
+		}
+
+		m.Tokens = meta.Tokens
+		m.Universe = meta.Universe
+		m.AssetCtxs = assetCtxs
+		return nil
+	}
+
+	// Fallback: try object form
+	var objectForm struct {
+		Tokens    []SpotToken    `json:"tokens"`
+		Universe  []SpotUniverse `json:"universe"`
+		AssetCtxs []SpotAssetCtx `json:"assetCtxs"`
+	}
+	if err := json.Unmarshal(data, &objectForm); err != nil {
+		return err
+	}
+
+	m.Tokens = objectForm.Tokens
+	m.Universe = objectForm.Universe
+	m.AssetCtxs = objectForm.AssetCtxs
+	return nil
 }
 
 // Meta is the response for the "meta" info type (simpler than metaAndAssetCtxs)
