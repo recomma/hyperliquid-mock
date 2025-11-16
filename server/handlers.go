@@ -641,15 +641,22 @@ func (h *Handler) handleMetaAndAssetCtxs() MetaAndAssetCtxs {
 
 // handleSpotMetaAndAssetCtxs returns mock spot trading metadata
 func (h *Handler) handleSpotMetaAndAssetCtxs() SpotMetaAndAssetCtxs {
+	dogeFullName := "Dogecoin"
+
 	return SpotMetaAndAssetCtxs{
 		Tokens: []SpotToken{
-			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true},
-			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true},
-			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true},
+			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "DOGE", SzDecimals: 1, WeiDecimals: 8, Index: 342, TokenId: "0xd0ged0ged0ged0ged0ged0ged0ged0ge", IsCanonical: true, FullName: &dogeFullName, DeployerTradingFeeShare: "0.0"},
 		},
 		Universe: []SpotUniverse{
 			{Tokens: []int{1, 0}, Name: "BTC/USDC", Index: 0},
 			{Tokens: []int{2, 0}, Name: "ETH/USDC", Index: 1},
+			{Tokens: []int{342, 0}, Name: "DOGE/USDC", Index: 210},
+		},
+		AssetCtxs: []SpotAssetCtx{
+			{PrevDayPx: "0.2168", DayNtlVlm: "12500000.0", MarkPx: "0.2168", MidPx: "0.2168", CirculatingSupply: "143000000000.0", Coin: "DOGE", TotalSupply: "143000000000.0", DayBaseVlm: "57500000.0"},
 		},
 	}
 }
@@ -687,15 +694,19 @@ func (h *Handler) handleMeta() Meta {
 
 // handleSpotMeta returns mock spot trading metadata (same structure as spotMetaAndAssetCtxs)
 func (h *Handler) handleSpotMeta() SpotMeta {
+	dogeFullName := "Dogecoin"
+
 	return SpotMeta{
 		Tokens: []SpotToken{
-			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true},
-			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true},
-			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true},
+			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "DOGE", SzDecimals: 1, WeiDecimals: 8, Index: 342, TokenId: "0xd0ged0ged0ged0ged0ged0ged0ged0ge", IsCanonical: true, FullName: &dogeFullName, DeployerTradingFeeShare: "0.0"},
 		},
 		Universe: []SpotUniverse{
 			{Tokens: []int{1, 0}, Name: "BTC/USDC", Index: 0},
 			{Tokens: []int{2, 0}, Name: "ETH/USDC", Index: 1},
+			{Tokens: []int{342, 0}, Name: "DOGE/USDC", Index: 210},
 		},
 	}
 }
