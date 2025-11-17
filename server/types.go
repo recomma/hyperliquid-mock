@@ -217,22 +217,29 @@ func (m *MetaAndAssetCtxs) UnmarshalJSON(data []byte) error {
 
 // SpotToken represents a spot trading token
 type SpotToken struct {
-	Name                    string  `json:"name"`
-	SzDecimals              int     `json:"szDecimals"`
-	WeiDecimals             int     `json:"weiDecimals"`
-	Index                   int     `json:"index"`
-	TokenId                 string  `json:"tokenId"`
-	IsCanonical             bool    `json:"isCanonical"`
-	EvmContract             *string `json:"evmContract,omitempty"`
-	FullName                *string `json:"fullName,omitempty"`
-	DeployerTradingFeeShare string  `json:"deployerTradingFeeShare,omitempty"`
+	Name                    string                `json:"name"`
+	SzDecimals              int                   `json:"szDecimals"`
+	WeiDecimals             int                   `json:"weiDecimals"`
+	Index                   int                   `json:"index"`
+	TokenId                 string                `json:"tokenId"`
+	IsCanonical             bool                  `json:"isCanonical"`
+	EvmContract             *SpotTokenEvmContract `json:"evmContract,omitempty"`
+	FullName                *string               `json:"fullName,omitempty"`
+	DeployerTradingFeeShare string                `json:"deployerTradingFeeShare,omitempty"`
+}
+
+// SpotTokenEvmContract holds on-chain contract metadata provided by the real API.
+type SpotTokenEvmContract struct {
+	Address             string `json:"address"`
+	EvmExtraWeiDecimals *int   `json:"evm_extra_wei_decimals,omitempty"`
 }
 
 // SpotUniverse represents a spot trading pair
 type SpotUniverse struct {
-	Tokens []int  `json:"tokens"`
-	Name   string `json:"name"`
-	Index  int    `json:"index"`
+	Tokens      []int  `json:"tokens"`
+	Name        string `json:"name"`
+	Index       int    `json:"index"`
+	IsCanonical bool   `json:"isCanonical"`
 }
 
 // SpotMetaAndAssetCtxs is the response for spot metadata queries

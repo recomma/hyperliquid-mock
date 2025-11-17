@@ -112,97 +112,30 @@ func TestHandleInfo_Meta(t *testing.T) {
 		return
 	}
 
-	// Log raw JSON response
-	t.Logf("Raw JSON response:\n%s", w.Body.String())
-
 	// Parse response
 	var response Meta
 	if err := json.Unmarshal(w.Body.Bytes(), &response); err != nil {
 		t.Fatalf("Failed to unmarshal response: %v\nBody: %s", err, w.Body.String())
 	}
 
-	// Validate response structure
-	if len(response.Universe) == 0 {
-		t.Error("Expected universe to have assets")
+	if got, want := len(response.Universe), 203; got != want {
+		t.Fatalf("expected %d assets in universe, got %d", want, got)
+	}
+	if got, want := len(response.MarginTables), 7; got != want {
+		t.Fatalf("expected %d margin tables, got %d", want, got)
 	}
 
-	// Check for expected assets
-	foundBTC := false
-	foundETH := false
-	for _, asset := range response.Universe {
-		if asset.Name == "BTC" {
-			foundBTC = true
-			if asset.SzDecimals != 5 {
-				t.Errorf("BTC: expected szDecimals=5, got %d", asset.SzDecimals)
-			}
-			if asset.MaxLeverage == 0 {
-				t.Error("BTC: expected MaxLeverage > 0")
-			}
-		}
-		if asset.Name == "ETH" {
-			foundETH = true
-			if asset.SzDecimals != 4 {
-				t.Errorf("ETH: expected szDecimals=4, got %d", asset.SzDecimals)
-			}
-		}
+	btc := response.Universe[0]
+	if btc.Name != "BTC" || btc.SzDecimals != 5 || btc.MaxLeverage != 40 || btc.MarginTableId != 56 {
+		t.Fatalf("unexpected BTC metadata: %+v", btc)
 	}
 
-	if !foundBTC {
-		t.Error("Expected to find BTC in universe")
-	}
-	if !foundETH {
-		t.Error("Expected to find ETH in universe")
+	last := response.Universe[len(response.Universe)-1]
+	if last.Name == "" {
+		t.Fatalf("expected last universe entry to have a name: %+v", last)
 	}
 
-	// Check margin tables (they are tuples: [[id, {object}], ...])
-	if len(response.MarginTables) == 0 {
-		t.Error("Expected margin tables to exist")
-	}
-
-	for i, tuple := range response.MarginTables {
-		if len(tuple) != 2 {
-			t.Errorf("MarginTable %d: expected 2-element tuple, got %d elements", i, len(tuple))
-			continue
-		}
-
-		// Extract id and table object from tuple
-		// JSON unmarshals numbers as float64 when target is interface{}
-		var id int
-		switch v := tuple[0].(type) {
-		case int:
-			id = v
-		case float64:
-			id = int(v)
-		default:
-			t.Errorf("MarginTable %d: expected numeric id, got %T", i, tuple[0])
-			continue
-		}
-
-		tableObj, ok := tuple[1].(map[string]interface{})
-		if !ok {
-			t.Errorf("MarginTable %d: expected map[string]interface{}, got %T", i, tuple[1])
-			continue
-		}
-
-		// Check marginTiers exists in the table object
-		marginTiers, ok := tableObj["marginTiers"]
-		if !ok {
-			t.Errorf("MarginTable %d (id=%d): missing marginTiers", i, id)
-			continue
-		}
-
-		tiersSlice, ok := marginTiers.([]map[string]interface{})
-		if !ok {
-			t.Errorf("MarginTable %d (id=%d): marginTiers has wrong type %T", i, id, marginTiers)
-			continue
-		}
-
-		if len(tiersSlice) == 0 {
-			t.Errorf("MarginTable %d (id=%d): expected margin tiers", i, id)
-		}
-	}
-
-	t.Logf("✓ Meta response: %d assets, %d margin tables", len(response.Universe), len(response.MarginTables))
+	t.Logf("✓ Meta response matches recorded fixture: %d assets", len(response.Universe))
 }
 
 func TestProcessOrderRejectsLowPriceBtcIOC(t *testing.T) {
@@ -295,42 +228,24 @@ func TestHandleInfo_SpotMeta(t *testing.T) {
 		t.Fatalf("Failed to unmarshal response: %v\nBody: %s", err, w.Body.String())
 	}
 
-	// Validate response structure
-	if len(response.Tokens) == 0 {
-		t.Error("Expected tokens to exist")
+	if got, want := len(response.Tokens), 342; got != want {
+		t.Fatalf("expected %d spot tokens, got %d", want, got)
+	}
+	if got, want := len(response.Universe), 199; got != want {
+		t.Fatalf("expected %d spot pairs, got %d", want, got)
 	}
 
-	if len(response.Universe) == 0 {
-		t.Error("Expected universe to have trading pairs")
+	firstToken := response.Tokens[0]
+	if firstToken.Name != "USDC" || firstToken.SzDecimals != 8 {
+		t.Fatalf("unexpected first token %+v", firstToken)
 	}
 
-	// Check for expected tokens
-	foundUSDC := false
-	foundDOGE := false
-	for _, token := range response.Tokens {
-		if token.Name == "USDC" {
-			foundUSDC = true
-			if token.SzDecimals != 6 {
-				t.Errorf("USDC: expected szDecimals=6, got %d", token.SzDecimals)
-			}
-		}
-		if token.Name == "DOGE" {
-			foundDOGE = true
-			if token.SzDecimals != 1 {
-				t.Errorf("DOGE: expected szDecimals=1, got %d", token.SzDecimals)
-			}
-		}
+	firstPair := response.Universe[0]
+	if firstPair.Name != "PURR/USDC" || firstPair.Index != 0 {
+		t.Fatalf("unexpected first universe entry %+v", firstPair)
 	}
 
-	if !foundUSDC {
-		t.Error("Expected to find USDC in tokens")
-	}
-
-	if !foundDOGE {
-		t.Error("Expected to find DOGE in tokens")
-	}
-
-	t.Logf("✓ SpotMeta response: %d tokens, %d trading pairs", len(response.Tokens), len(response.Universe))
+	t.Logf("✓ SpotMeta response matches recorded fixture: %d tokens, %d trading pairs", len(response.Tokens), len(response.Universe))
 }
 
 // TestHandleInfo_SpotMetaAndAssetCtxs validates the combined spot metadata and asset contexts
@@ -358,36 +273,19 @@ func TestHandleInfo_SpotMetaAndAssetCtxs(t *testing.T) {
 		t.Fatalf("Failed to unmarshal response: %v (body: %s)", err, w.Body.String())
 	}
 
-	if len(response.Tokens) == 0 {
-		t.Fatal("Expected tokens to be present")
+	if got, want := len(response.Tokens), 342; got != want {
+		t.Fatalf("expected %d tokens, got %d", want, got)
+	}
+	if got, want := len(response.Universe), 199; got != want {
+		t.Fatalf("expected %d universe entries, got %d", want, got)
+	}
+	if got, want := len(response.AssetCtxs), 210; got != want {
+		t.Fatalf("expected %d asset ctx entries, got %d", want, got)
 	}
 
-	if len(response.AssetCtxs) == 0 {
-		t.Fatal("Expected assetCtxs to be present")
-	}
-
-	foundDOGE := false
-	for _, token := range response.Tokens {
-		if token.Name == "DOGE" {
-			foundDOGE = true
-			break
-		}
-	}
-
-	if !foundDOGE {
-		t.Fatal("Expected DOGE token in spot metadata")
-	}
-
-	foundDOGECtx := false
-	for _, ctx := range response.AssetCtxs {
-		if ctx.Coin == "DOGE" {
-			foundDOGECtx = true
-			break
-		}
-	}
-
-	if !foundDOGECtx {
-		t.Fatal("Expected DOGE asset context in response")
+	firstCtx := response.AssetCtxs[0]
+	if firstCtx.Coin != "PURR/USDC" || firstCtx.MarkPx == "" || firstCtx.DayNtlVlm == "" {
+		t.Fatalf("unexpected first asset ctx %+v", firstCtx)
 	}
 }
 
@@ -420,15 +318,22 @@ func TestHandleInfo_MetaAndAssetCtxs(t *testing.T) {
 		t.Fatalf("Failed to unmarshal response: %v\nBody: %s", err, w.Body.String())
 	}
 
-	if len(response.Universe) == 0 {
-		t.Error("Expected universe to have assets")
+	if got, want := len(response.Universe), 203; got != want {
+		t.Fatalf("expected %d universe entries, got %d", want, got)
+	}
+	if got, want := len(response.AssetCtxs), 203; got != want {
+		t.Fatalf("expected %d asset contexts, got %d", want, got)
+	}
+	if got, want := len(response.MarginTables), 7; got != want {
+		t.Fatalf("expected %d margin tables, got %d", want, got)
 	}
 
-	if len(response.AssetCtxs) == 0 {
-		t.Error("Expected assetCtxs to exist")
+	firstCtx := response.AssetCtxs[0]
+	if firstCtx.MarkPx == "" || firstCtx.Funding == "" {
+		t.Fatalf("unexpected first asset context: %+v", firstCtx)
 	}
 
-	t.Logf("✓ MetaAndAssetCtxs response: %d assets, %d contexts", len(response.Universe), len(response.AssetCtxs))
+	t.Logf("✓ MetaAndAssetCtxs response matches recorded fixture: %d assets, %d contexts", len(response.Universe), len(response.AssetCtxs))
 }
 
 // TestHandleInfo_UnknownType tests that unknown info types return 400
