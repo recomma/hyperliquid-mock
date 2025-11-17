@@ -282,10 +282,13 @@ func extractTimeInForce(orderMap map[string]interface{}) string {
 
 // mapAssetIndexToCoin maps an asset index to a coin name
 func (h *Handler) mapAssetIndexToCoin(index int) string {
-	// Standard mapping based on common perpetual futures order
-	assets := []string{"BTC", "ETH", "SOL", "ARB"}
-	if index >= 0 && index < len(assets) {
-		return assets[index]
+	if recorded, err := getRecordedMeta(); err == nil {
+		if index >= 0 && index < len(recorded.Universe) {
+			return recorded.Universe[index].Name
+		}
+	}
+	if index >= 0 && index < len(fallbackPerpAssets) {
+		return fallbackPerpAssets[index]
 	}
 	return fmt.Sprintf("ASSET_%d", index)
 }
@@ -563,6 +566,116 @@ func (h *Handler) handleOrderStatus(req InfoRequest) OrderQueryResult {
 
 // handleMetaAndAssetCtxs returns mock perpetual futures metadata
 func (h *Handler) handleMetaAndAssetCtxs() MetaAndAssetCtxs {
+	if recorded, err := getRecordedMetaAndAssetCtxs(); err == nil {
+		return recorded
+	} else {
+		h.logger.Warn("falling back to static metaAndAssetCtxs data", "error", err)
+	}
+	return fallbackMetaAndAssetCtxs()
+}
+
+// handleSpotMetaAndAssetCtxs returns mock spot trading metadata
+func (h *Handler) handleSpotMetaAndAssetCtxs() SpotMetaAndAssetCtxs {
+	if recorded, err := getRecordedSpotMetaAndAssetCtxs(); err == nil {
+		return recorded
+	} else {
+		h.logger.Warn("falling back to static spotMetaAndAssetCtxs data", "error", err)
+	}
+	return fallbackSpotMetaAndAssetCtxs()
+}
+
+// handleMeta returns mock perpetual futures metadata (simpler format than metaAndAssetCtxs)
+func (h *Handler) handleMeta() Meta {
+	if recorded, err := getRecordedMeta(); err == nil {
+		return recorded
+	} else {
+		h.logger.Warn("falling back to static meta data", "error", err)
+	}
+	return fallbackMeta()
+}
+
+// handleSpotMeta returns mock spot trading metadata (same structure as spotMetaAndAssetCtxs)
+func (h *Handler) handleSpotMeta() SpotMeta {
+	if recorded, err := getRecordedSpotMeta(); err == nil {
+		return recorded
+	} else {
+		h.logger.Warn("falling back to static spotMeta data", "error", err)
+	}
+	return fallbackSpotMeta()
+}
+
+func fallbackSpotMeta() SpotMeta {
+	return SpotMeta{
+		Tokens:   append([]SpotToken(nil), fallbackSpotMetaAndAssetCtxData.Tokens...),
+		Universe: append([]SpotUniverse(nil), fallbackSpotMetaAndAssetCtxData.Universe...),
+	}
+}
+
+func fallbackSpotMetaAndAssetCtxs() SpotMetaAndAssetCtxs {
+	return SpotMetaAndAssetCtxs{
+		Tokens:   append([]SpotToken(nil), fallbackSpotMetaAndAssetCtxData.Tokens...),
+		Universe: append([]SpotUniverse(nil), fallbackSpotMetaAndAssetCtxData.Universe...),
+		AssetCtxs: append(
+			[]SpotAssetCtx(nil),
+			fallbackSpotMetaAndAssetCtxData.AssetCtxs...,
+		),
+	}
+}
+
+var (
+	fallbackDogeFullName            = "Dogecoin"
+	fallbackSpotMetaAndAssetCtxData = SpotMetaAndAssetCtxs{
+		Tokens: []SpotToken{
+			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true, DeployerTradingFeeShare: "0.0"},
+			{Name: "DOGE", SzDecimals: 1, WeiDecimals: 8, Index: 342, TokenId: "0xd0ged0ged0ged0ged0ged0ged0ged0ge", IsCanonical: true, FullName: &fallbackDogeFullName, DeployerTradingFeeShare: "0.0"},
+		},
+		Universe: []SpotUniverse{
+			{Tokens: []int{1, 0}, Name: "BTC/USDC", Index: 0, IsCanonical: true},
+			{Tokens: []int{2, 0}, Name: "ETH/USDC", Index: 1, IsCanonical: true},
+			{Tokens: []int{342, 0}, Name: "DOGE/USDC", Index: 210, IsCanonical: true},
+		},
+		AssetCtxs: []SpotAssetCtx{
+			{PrevDayPx: "0.2168", DayNtlVlm: "12500000.0", MarkPx: "0.2168", MidPx: "0.2168", CirculatingSupply: "143000000000.0", Coin: "DOGE", TotalSupply: "143000000000.0", DayBaseVlm: "57500000.0"},
+		},
+	}
+)
+
+var fallbackPerpAssets = []string{"BTC", "ETH", "SOL", "ARB"}
+
+func fallbackMeta() Meta {
+	return Meta{
+		Universe: []AssetInfo{
+			{Name: "BTC", SzDecimals: 5, MaxLeverage: 50, MarginTableId: 1},
+			{Name: "ETH", SzDecimals: 4, MaxLeverage: 50, MarginTableId: 1},
+			{Name: "SOL", SzDecimals: 1, MaxLeverage: 20, MarginTableId: 2},
+			{Name: "ARB", SzDecimals: 0, MaxLeverage: 20, MarginTableId: 2},
+			{Name: "DOGE", SzDecimals: 0, MaxLeverage: 10, MarginTableId: 2},
+		},
+		// MarginTables is an array of tuples: [[id, {description, marginTiers}], ...]
+		MarginTables: [][]interface{}{
+			{1, MarginTable{
+				Description: "Standard",
+				MarginTiers: []MarginTier{
+					{LowerBound: "0.0", MaxLeverage: 50},
+					{LowerBound: "100000.0", MaxLeverage: 25},
+					{LowerBound: "500000.0", MaxLeverage: 10},
+				},
+			}},
+			{2, MarginTable{
+				Description: "Alt Coins",
+				MarginTiers: []MarginTier{
+					{LowerBound: "0.0", MaxLeverage: 20},
+					{LowerBound: "50000.0", MaxLeverage: 10},
+					{LowerBound: "200000.0", MaxLeverage: 5},
+				},
+			}},
+		},
+	}
+}
+
+func fallbackMetaAndAssetCtxs() MetaAndAssetCtxs {
 	return MetaAndAssetCtxs{
 		Universe: []MetaUniverse{
 			{Name: "BTC", SzDecimals: 5},
@@ -635,67 +748,6 @@ func (h *Handler) handleMetaAndAssetCtxs() MetaAndAssetCtxs {
 				MarkPx:       "1.52",
 				MidPx:        "1.515",
 			},
-		},
-	}
-}
-
-// handleSpotMetaAndAssetCtxs returns mock spot trading metadata
-func (h *Handler) handleSpotMetaAndAssetCtxs() SpotMetaAndAssetCtxs {
-	return SpotMetaAndAssetCtxs{
-		Tokens: []SpotToken{
-			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true},
-			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true},
-			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true},
-		},
-		Universe: []SpotUniverse{
-			{Tokens: []int{1, 0}, Name: "BTC/USDC", Index: 0},
-			{Tokens: []int{2, 0}, Name: "ETH/USDC", Index: 1},
-		},
-	}
-}
-
-// handleMeta returns mock perpetual futures metadata (simpler format than metaAndAssetCtxs)
-func (h *Handler) handleMeta() Meta {
-	return Meta{
-		Universe: []AssetInfo{
-			{Name: "BTC", SzDecimals: 5, MaxLeverage: 50, MarginTableId: 1},
-			{Name: "ETH", SzDecimals: 4, MaxLeverage: 50, MarginTableId: 1},
-			{Name: "SOL", SzDecimals: 1, MaxLeverage: 20, MarginTableId: 2},
-			{Name: "ARB", SzDecimals: 0, MaxLeverage: 20, MarginTableId: 2},
-		},
-		// MarginTables is an array of tuples: [[id, {description, marginTiers}], ...]
-		MarginTables: [][]interface{}{
-			{1, MarginTable{
-				Description: "Standard",
-				MarginTiers: []MarginTier{
-					{LowerBound: "0.0", MaxLeverage: 50},
-					{LowerBound: "100000.0", MaxLeverage: 25},
-					{LowerBound: "500000.0", MaxLeverage: 10},
-				},
-			}},
-			{2, MarginTable{
-				Description: "Alt Coins",
-				MarginTiers: []MarginTier{
-					{LowerBound: "0.0", MaxLeverage: 20},
-					{LowerBound: "50000.0", MaxLeverage: 10},
-					{LowerBound: "200000.0", MaxLeverage: 5},
-				},
-			}},
-		},
-	}
-}
-
-// handleSpotMeta returns mock spot trading metadata (same structure as spotMetaAndAssetCtxs)
-func (h *Handler) handleSpotMeta() SpotMeta {
-	return SpotMeta{
-		Tokens: []SpotToken{
-			{Name: "USDC", SzDecimals: 6, WeiDecimals: 6, Index: 0, TokenId: "0x1", IsCanonical: true},
-			{Name: "BTC", SzDecimals: 8, WeiDecimals: 8, Index: 1, TokenId: "0x2", IsCanonical: true},
-			{Name: "ETH", SzDecimals: 18, WeiDecimals: 18, Index: 2, TokenId: "0x3", IsCanonical: true},
-		},
-		Universe: []SpotUniverse{
-			{Tokens: []int{1, 0}, Name: "BTC/USDC", Index: 0},
-			{Tokens: []int{2, 0}, Name: "ETH/USDC", Index: 1},
 		},
 	}
 }
